@@ -78,3 +78,20 @@ ssh gx10-02 "podman kill -a; podman rm -a -f"
 Normal. This setup uses **rootless podman**; Docker CLI may exist but its
 daemon socket is root-owned. Always: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`
 before `podman`/`systemctl --user` in scripts.
+
+## 8. Gated repo: CLI `403: this repo is gated` despite granted access
+
+`hf download` (huggingface_hub) routes large files through **Xet** storage,
+which does not propagate the token for some gated repos — the API says you
+have access (LFS `resolve` returns 302) but the CLI 403s on the first shard.
+
+Fix: force the LFS fallback
+
+```bash
+export HF_HUB_DISABLE_XET=1
+ABLIT=1 ./download.sh        # or: HF_HUB_DISABLE_XET=1 uvx hf download ...
+```
+
+(Verified 2026-10-07 on `drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47`:
+3 GB shard in ~37 s with Xet off; also confirms gate + token must both be valid —
+`hf auth whoami` + a `resolve` HEAD on a `.safetensors` file are the two probes.)
