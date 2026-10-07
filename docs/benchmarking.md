@@ -35,6 +35,35 @@ TP=2, MTP **3** speculative tokens, expert parallel on, FP8 KV cache,
   (recorded outcome: **45.5 → integrated**).
 - **<40 t/s** → report measurement + delta analysis and ask before wiring it in.
 
+## Concurrency & workload-type sweep (flash-next native stack, 2026-10-07)
+
+Harness: `tools/stack-sweep.py` (concurrent OpenAI-API clients, greedy,
+requests kept in flight for 50 s; aggregate from `usage` fields).
+
+| Workload | C | Aggregate tok/s | Per-stream p50 | p95 |
+|---|---|---|---|---|
+| Chat 1.2K→1024 (decode-heavy) | 1 | 61 | 50.3 | 56.7 |
+| | 2 | 123 | 47.1 | 49.0 |
+| | 4 | 164 | 37.0 | 42.3 |
+| | 8 | 328 | 27.9 | 30.8 |
+| | 12 | 410 | 25.8 | 32.4 |
+| | 16 | 492 | 14.9 | 32.5 |
+| Long ctx 16K→256 | 4 | 105 | 26.6 | 29.5 |
+| Long ctx 64K→128 | 4 | 78 | 21.5 | 25.8 |
+| Vision (512px PNG→describe) | 2 | 84 | 38.6 | 42.2 |
+| Reasoning-heavy (512 out incl. reasoning) | 4 | 157 | 36.7 | 40.5 |
+
+Notes:
+- Decode-heavy row uses a repetitive numbers-listing prompt (chain-friendly for
+  MTP-3 spec decode) — **realistic diverse text is ~45 t/s single-stream**
+  (llama-benchy row above), so expect ~0.75–0.9× these aggregate figures for
+  real prose.
+- `MAX_NUM_SEQS=8`: beyond C=8 the extra requests queue; the tail (p50) grows
+  at C=16 while aggregate keeps climbing (no errors observed up to 16).
+- Reference (b12x/DeepSeek stack, prior measurement): peak **~72.7 tok/s API
+  aggregate** (64K ctx, 16 users) — the native stack delivers ~6.8× that at
+  the same box.
+
 ## Reproducing
 
 ```bash
