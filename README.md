@@ -133,11 +133,15 @@ note.
 - **DeepSeek / b12x stack** (the standard DeepSeek deployment repo we used):
   - **`kambiz-aghaiepour/spark-vllm-docker`** — **our fork** of eugr's launcher,
     which we use for the cluster (<https://github.com/kambiz-aghaiepour/spark-vllm-docker>).
-    Podman patches applied: commit `55cb129` — *"Add podman support via
-    CONTAINER_RT environment variable"* (launcher runs under rootless podman;
-    upstream uses docker). Applied vLLM PR patches (per fork README):
-    **`local-inference-lab/vllm#669`** (full-PR-URL launch-time patches) and
-    **`vllm-project/vllm#42354`** (NCCL load-order bug, `mods/use-official-vllm`).
+    Podman patches applied: **PR [eugr/spark-vllm-docker#131](https://github.com/eugr/spark-vllm-docker/pull/131)
+    *"Add podman support via CONTAINER_RT environment variable"* by
+    **Sebastian Jug ([sjug](https://github.com/sjug))** — commit `55cb129`;
+    the launcher therefore runs under rootless podman (upstream defaults to
+    docker). Applied vLLM PR patches (per fork README):
+    **`local-inference-lab/vllm#669`** (*"Preserve aligned hybrid cache reuse
+    alongside endpoint checkpoints"*, by **logprobz** — full-PR-URL launch-time
+    patches) and the NCCL load-order fix tracked in
+    **`vllm-project/vllm#42354`** (open issue, `mods/use-official-vllm`).
   - **Upstream (credit): `eugr/spark-vllm-docker`** — the repo this was forked
     from (<https://github.com/eugr/spark-vllm-docker>). For a vanilla (docker)
     deployment, use upstream directly.

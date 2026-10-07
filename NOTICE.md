@@ -11,7 +11,7 @@ pulled at runtime by the scripts and referenced in the README:
 | Upstream | What it is | License | Where it lives at runtime |
 |---|---|---|---|
 | `kambiz-aghaiepour/spark-vllm-docker` | **our fork** of the DeepSeek/b12x launcher; podman support via `CONTAINER_RT` (commit `55cb129`) + applied vLLM PR patches (`local-inference-lab/vllm#669`, `vllm-project/vllm#42354`) | see upstream | `~/spark-vllm-docker` |
-| `eugr/spark-vllm-docker` | **upstream** of the above fork (DeepSeek/b12x cluster launcher + MXFP4 image build) | see upstream | upstream repository |
+| `eugr/spark-vllm-docker` | **upstream** of the above fork (DeepSeek/b12x cluster launcher + MXFP4 image build). Podman support: **PR #131 "Add podman support via CONTAINER_RT" by Sebastian Jug ([sjug](https://github.com/sjug)**, commit `55cb129`) | see upstream | upstream repository |
 | `christopherowen/spark-vllm-mxfp4-docker` | image/Dockerfile lineage (vLLM `045293d`, FlashInfer, CUTLASS forks) | see upstream | upstream reference only |
 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` | Qwen3.8-Flash-Next runbook + `vllm/vllm-openai:qwen38-flash-next` image + overlay patches | **AGPL-3.0** | `~/miaai-qwen38` (cloned by `podman-adapt-runbook.sh`) |
 | NVIDIA docs (`docs.nvidia.com/dgx/dgx-spark`, `build.nvidia.com/spark`) | DGX Spark clustering / Connect-Two-Sparks | NVIDIA | n/a (docs) |

@@ -114,7 +114,10 @@ Image build note: `Dockerfile.mxfp4` builds from `nvcr.io/nvidia/pytorch`
 (NGC login required for `podman pull`), pins `christopherowen/vllm@045293d`
 (mxfp4 lineage), and applies the fork's launch-time patch overlays
 (`mods/`), including the `mods/drop-caches` page-cache helper and the applied
-vLLM PR patches (`local-inference-lab/vllm#669`, `vllm-project/vllm#42354`).
+vLLM PR patches (`local-inference-lab/vllm#669` by logprobz; NCCL load-order
+fix tracked in `vllm-project/vllm#42354`). Podman launch support comes from
+upstream PR **eugr/spark-vllm-docker#131** (*"Add podman support via
+CONTAINER_RT"*, **Sebastian Jug / sjug**, commit `55cb129`).
 
 ## 7. Qwen3.8-Flash-Next native stack
 
