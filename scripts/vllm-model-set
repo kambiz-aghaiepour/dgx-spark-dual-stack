@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+# vllm-model-set <hf-model-id> [served-name] [--apply]
+# Phase 1 model selector: writes the boot default into model.conf; --apply
+# restarts the cluster (watchdog-disciplined) with the verified-readiness gate.
+CONF="${SPARK_VLLM_MODEL_CONF:-$HOME/.config/spark-vllm/model.conf}"
+ID="${1:?usage: vllm-model-set <hf-model-id> [served-name] [--apply]}"; shift || true
+ALIAS=""; APPLY=false
+for a in "$@"; do
+  case "$a" in
+    --apply) APPLY=true ;;
+    -*) : ;;
+    *) ALIAS="$a" ;;
+  esac
+done
+[ -n "$ALIAS" ] || ALIAS="$ID"
+HUB="$HOME/.cache/huggingface/hub"
+PAT="models--${ID//\//--}*"
+if ls -d "$HUB"/$PAT >/dev/null 2>&1; then
+  echo "cached on head: yes ($(du -sh "$HUB"/$PAT 2>/dev/null | cut -f1))"
+else
+  echo "WARNING: not found on head cache — run: hf-download.sh  -c"
+fi
+[ -f "$CONF" ] && cp "$CONF" "$CONF.bak"
+FLAGS_FILE="${FLAGS_FILE:-}"
+if [ -z "$FLAGS_FILE" ]; then
+  SAFE="$(echo "$ID" | sed 's|/|-|g; s|\.|_|g' | cut -c1-60)"
+  if [ -f "$HOME/.config/spark-vllm/flags/$SAFE.conf" ]; then
+    FLAGS_FILE="$HOME/.config/spark-vllm/flags/$SAFE.conf"
+  else
+    FLAGS_FILE="$HOME/.config/spark-vllm/flags/deepseek-v4.conf"
+  fi
+fi
+umask 077
+cat > "$CONF" <<EOF
+# vLLM boot model (managed by vllm-model-set). One flag per line in FLAGS_FILE.
+MODEL_ID=$ID
+SERVED_MODEL_NAME=$ALIAS
+FLAGS_FILE=$FLAGS_FILE
+EOF
+echo "--- model.conf updated (backup: model.conf.bak) ---"; cat "$CONF"
+if $APPLY; then
+  export XDG_RUNTIME_DIR=/run/user/1000
+  apply_int() {
+    echo ""
+    echo ">>> Interrupt (Ctrl-C/TERM) received: the switch continues in the background."
+    echo "    The engine restart proceeds on its own (systemd keeps it running)."
+    echo "    Check status with any of:"
+    echo "      vllm-model-select --status                # one-shot summary"
+    echo "      systemctl --user status spark-vllm-podman.service | head -5"
+    echo "      journalctl --user -u spark-vllm-podman.service -f"
+    echo "      curl -s http://127.0.0.1:8000/v1/models"
+    systemctl --user --no-block start spark-vllm-health.service 2>/dev/null || true
+    sleep 1
+    echo "watchdog: $(systemctl --user is-active spark-vllm-health.service) (will follow engine)"
+    exit 130
+  }
+  trap apply_int INT TERM
+  echo "applying: watchdog paused -> restart -> verify -> watchdog restored"
+  systemctl --user stop spark-vllm-health.service 2>/dev/null
+  systemctl --user stop spark-vllm-podman.service 2>/dev/null
+  # Dual-stack: remove whichever stack's container(s) are left (b12x
+  # vllm_node and/or model-native vllm-fn), on both nodes.
+  podman rm -f vllm_node >/dev/null 2>&1
+  podman rm -f vllm-fn >/dev/null 2>&1
+  ssh -o BatchMode=yes gx10-02 "podman rm -f vllm_node >/dev/null 2>&1" || true
+  ssh -o BatchMode=yes gx10-02 "podman rm -f vllm-fn >/dev/null 2>&1" || true
+  # GB10 unified memory: release the checkpoint's page cache before loading so
+  # it can't push the engine into a startup OOM (proven race on this kit).
+  MDIR="$HOME/.cache/huggingface/hub/models--${ID//\//--}"
+  python3 "$HOME/.local/bin/spark-vllm-evict-cache.py" "$MDIR" 2>/dev/null || true
+  ssh -o BatchMode=yes gx10-02 "python3 ~/.local/bin/spark-vllm-evict-cache.py \"\$HOME/.cache/huggingface/hub/models--${ID//\//--}\"" 2>/dev/null || true
+  systemctl --user reset-failed spark-vllm-podman.service 2>/dev/null
+  systemctl --user start spark-vllm-podman.service
+  for i in $(seq 1 120); do
+    T=$(python3 - <<PY
+import time,urllib.request,json
+t=time.time()
+try:
+    r=urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8000/v1/chat/completions",
+        data=json.dumps({"model":"$ALIAS","messages":[{"role":"user","content":"hi"}],"max_tokens":1}).encode(),
+        headers={"Content-Type":"application/json"}),timeout=8)
+    print(f"{time.time()-t:.2f}")
+except Exception: print(999)
+PY
+)
+    if python3 -c "exit(0 if $T < 10 else 1)" 2>/dev/null; then echo "engine ready (smoke ${T}s)"; break; fi
+    ELAPSED="$(( i*15/60 ))m$(( (i*15)%60 ))s"
+    LAST=$(journalctl --user -u spark-vllm-podman.service -n 60 --no-pager 2>/dev/null \
+        | grep -E "Resolved architecture|Initializing a V1|Loading model|GPU KV cache|ERROR|Exception|Error with" \
+        | tail -1 | sed 's/^.*spark-vllm-podman-start-select\[[0-9]*\]://' | cut -c1-110)
+    echo "[$i/120 ${ELAPSED}] engine still starting${LAST:+ | $LAST}"
+    sleep 15
+  done
+  systemctl --user --no-block start spark-vllm-health.service
+  sleep 1
+  echo "watchdog: $(systemctl --user is-active spark-vllm-health.service)"
+fi

@@ -1,0 +1,18 @@
+[Unit]
+Description=Spark vLLM podman cluster (DeepSeek-V4-Flash-Vision-Exp, TP=2)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kambiz/spark-vllm-docker
+LimitNOFILE=500000
+TimeoutStartSec=1800
+TimeoutStopSec=180
+ExecStart=/home/kambiz/.local/bin/spark-vllm-podman-start
+ExecStartPost=/home/kambiz/.local/bin/spark-vllm-podman-health
+ExecStop=/home/kambiz/.local/bin/spark-vllm-podman-stop
+Restart=no
+
+[Install]
+WantedBy=default.target

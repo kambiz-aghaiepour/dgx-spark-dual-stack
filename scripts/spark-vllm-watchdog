@@ -1,0 +1,102 @@
+#!/bin/bash
+# Spark vLLM health watchdog (systemd user service, runs as kambiz).
+# Monitors spark-vllm-podman; on failure/failed state: stop -> reset-failed -> start (blocking health gate).
+# Configurable (env vars override; else ~/.config/spark-vllm-watchdog.conf, else defaults):
+#   SPARK_VLLM_WATCHDOG_FAILURE_LIMIT  consecutive probe failures before restart (default 10)
+#   SPARK_VLLM_WATCHDOG_PROBE_TIMEOUT  per-probe curl timeout in seconds (default 90)
+# Usage: spark-vllm-watchdog            (loop, used by the unit)
+#        spark-vllm-watchdog check      (one probe round; exit 0=healthy, 1=unhealthy)
+set -uo pipefail
+
+CONF="${SPARK_VLLM_WATCHDOG_CONF:-$HOME/.config/spark-vllm-watchdog.conf}"
+[ -f "$CONF" ] && . "$CONF"
+FAILURE_LIMIT="${SPARK_VLLM_WATCHDOG_FAILURE_LIMIT:-${FAILURE_LIMIT:-10}}"
+PROBE_TIMEOUT="${SPARK_VLLM_WATCHDOG_PROBE_TIMEOUT:-${PROBE_TIMEOUT:-90}}"
+# guard against bad config values
+printf '%s' "$FAILURE_LIMIT" | grep -qE '^[0-9]+$' || { echo "WATCHDOG: invalid SPARK_VLLM_WATCHDOG_FAILURE_LIMIT, using 10"; FAILURE_LIMIT=10; }
+printf '%s' "$PROBE_TIMEOUT" | grep -qE '^[0-9]+$' || { echo "WATCHDOG: invalid SPARK_VLLM_WATCHDOG_PROBE_TIMEOUT, using 90"; PROBE_TIMEOUT=90; }
+
+SVC=spark-vllm-podman
+BASE=http://localhost:8000
+FLAG="$HOME/.spark-vllm-maintenance"
+# probe the model under its currently served name (model.conf), re-read on
+# every probe so model switches are tracked even if this process was started
+# before model.conf changed; DeepSeek keeps its no-reasoning probe kwarg
+MODEL_CONF="${SPARK_VLLM_MODEL_CONF:-$HOME/.config/spark-vllm/model.conf}"
+
+# Sets PROBE_REASON on failure so the loop can tell "busy/saturated" from "dead".
+probe() {
+  PROBE_REASON=
+  local code
+  SERVED=$(sed -n 's/^SERVED_MODEL_NAME=//p' "$MODEL_CONF" 2>/dev/null | head -1)
+  [ -n "$SERVED" ] || SERVED="deepseek-ai/DeepSeek-V4-Flash-Vision-Exp"
+  case "$SERVED" in
+    *deepseek*|*DeepSeek*) PROBE_TAIL=',"chat_template_kwargs":{"thinking":false}' ;;
+    *) PROBE_TAIL='' ;;
+  esac
+  PROBE_BODY="{\"model\":\"$SERVED\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi.\"}],\"max_tokens\":1$PROBE_TAIL}"
+  curl -fsS --max-time "$PROBE_TIMEOUT" "$BASE/health" >/dev/null 2>&1 || { PROBE_REASON=health; return 1; }
+  curl -fsS --max-time "$PROBE_TIMEOUT" "$BASE/v1/models" >/dev/null 2>&1 || { PROBE_REASON=models; return 1; }
+  code=$(curl -s --max-time "$PROBE_TIMEOUT" -o /tmp/spark-vllm-probe.json -w "%{http_code}" \
+    -H "Content-Type: application/json" -d "$PROBE_BODY" "$BASE/v1/chat/completions") || { PROBE_REASON="completion(timeout/cxn)"; return 1; }
+  [ "$code" = "200" ] || { PROBE_REASON="completion(http $code)"; return 1; }
+  python3 -c "import json;json.load(open('/tmp/spark-vllm-probe.json'))" 2>/dev/null || { PROBE_REASON="completion(unparsable)"; return 1; }
+  return 0
+}
+
+state() { systemctl --user show -p ActiveState --value "$SVC" 2>/dev/null; }
+
+restart_cycle() {
+  echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC unhealthy/failed -> restart cycle"
+  systemctl --user stop "$SVC" 2>/dev/null
+  systemctl --user reset-failed "$SVC" 2>/dev/null
+  # start blocks until the health gate settles: active=verified healthy, failed=try again
+  if systemctl --user start "$SVC"; then
+    echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC healthy after restart"
+    attempts=0
+    return 0
+  fi
+  attempts=$((attempts + 1))
+  echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC start failed (attempt $attempts)"
+  return 1
+}
+
+if [ "${1:-}" = "check" ]; then
+  if probe; then echo "HEALTHY"; exit 0; else echo "UNHEALTHY (state=$(state), reason=$PROBE_REASON)"; exit 1; fi
+fi
+
+echo "[$(date +%H:%M:%S)] WATCHDOG: started (failure_limit=$FAILURE_LIMIT, probe_timeout=${PROBE_TIMEOUT}s)"
+attempts=0
+failures=0
+while true; do
+  if [ -f "$FLAG" ]; then
+    sleep 60; continue
+  fi
+  s=$(state)
+  case "$s" in
+    activating|reloading)
+      sleep 60 ;;                # normal slow startup; do not interfere
+    active)
+      if probe; then
+        failures=0
+        sleep 60
+      else
+        failures=$((failures + 1))
+        echo "[$(date +%H:%M:%S)] WATCHDOG: probe failure $failures/$FAILURE_LIMIT (state=$s, reason=$PROBE_REASON)"
+        if [ "$failures" -ge "$FAILURE_LIMIT" ]; then
+          failures=0
+          restart_cycle || true
+          # backoff on repeated start failures
+          if [ "$attempts" -ge 1 ]; then sleep $((60 * 5 ** (attempts > 3 ? 3 : attempts))); fi
+        fi
+        sleep 30
+      fi ;;
+    failed|inactive)
+      attempts=$((attempts + 1))
+      restart_cycle || true
+      sleep $((60 * 5 ** (attempts > 3 ? 3 : attempts))) ;;   # 1,5,25,125... min capped at 125 min
+    *)
+      echo "[$(date +%H:%M:%S)] WATCHDOG: unknown state '$s'"
+      sleep 60 ;;
+  esac
+done

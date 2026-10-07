@@ -1,0 +1,9 @@
+#!/bin/bash
+export CONTAINER_RT=podman
+cd /home/kambiz/spark-vllm-docker
+./launch-cluster.sh stop || true
+# Dual-stack: whichever stack ran, remove its container on both nodes
+# (b12x: vllm_node is cleaned by launch-cluster stop; MiaAI: vllm-fn).
+podman rm -f vllm-fn >/dev/null 2>&1 || true
+ssh -o BatchMode=yes gx10-02 "podman rm -f vllm-fn >/dev/null 2>&1" || true
+exit 0

@@ -1,0 +1,13 @@
+[Unit]
+Description=Spark vLLM health watchdog (restarts spark-vllm-podman on failure)
+After=spark-vllm-podman.service
+Wants=spark-vllm-podman.service
+
+[Service]
+Type=simple
+ExecStart=/home/kambiz/.local/bin/spark-vllm-watchdog
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

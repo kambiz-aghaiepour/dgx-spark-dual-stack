@@ -1,0 +1,4 @@
+# vLLM boot model (managed by vllm-model-set). One flag per line in FLAGS_FILE.
+MODEL_ID=orcarouter/DeepSeek-V4-Flash-Vision-Uncensored
+SERVED_MODEL_NAME=deepseek-ai/DeepSeek-V4-Flash-Vision-Exp
+FLAGS_FILE=/home/kambiz/.config/spark-vllm/flags/deepseek-v4.conf

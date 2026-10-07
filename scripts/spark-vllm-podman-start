@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+export CONTAINER_RT=podman
+export VLLM_SPARK_NOFILE_LIMIT=500000   # systemd user service hard-caps RLIMIT_NOFILE at 500000; anything above → crun EPERM
+cd /home/kambiz/spark-vllm-docker
+
+# Boot guard: wait until this node's CX-7 IPs and the worker are reachable (max 15 min)
+for i in $(seq 1 90); do
+  ip -4 addr show | grep -q 192.168.177.11 && ssh -o BatchMode=yes -o ConnectTimeout=5 gx10-02 true && break
+  sleep 10
+done
+
+./launch-cluster.sh -d -t vllm-node-b12x \
+  --apply-mod mods/instanttensor-hybrid-draft-loader \
+  --apply-mod mods/busy-loop-fix \
+  -e CUTE_DSL_ARCH=sm_121a -e VLLM_USE_AOT_COMPILE=1 \
+  -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
+  -e VLLM_USE_MEGA_AOT_ARTIFACT=1 -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+  -e VLLM_USE_B12X_WO_PROJECTION=1 -e VLLM_USE_B12X_MHC=1 \
+  -e VLLM_USE_B12X_FP8_GEMM=1 -e VLLM_USE_B12X_MOE=1 \
+  -e VLLM_USE_B12X_SPARSE_INDEXER=1 -e VLLM_USE_V2_MODEL_RUNNER=1 \
+  -e VLLM_ENGINE_ITERATION_TIMEOUT_S=600 \
+  -e VLLM_MOE_SKIP_PADDING=0 -e B12X_MLA_SM120_UNIFIED=1 -e B12X_MOE_FORCE_A8=1 \
+  -e UCX_MEM_MMAP_HOOK_MODE=none -e UCX_RCACHE_MAX_UNRELEASED=1024 \
+  start
+
+exec ./launch-cluster.sh exec vllm serve deepseek-ai/DeepSeek-V4-Flash-Vision-Exp \
+  --host 0.0.0.0 --port 8000 --trust-remote-code --tensor-parallel-size 2 \
+  --kv-cache-dtype fp8 --block-size 256 --max-model-len auto \
+  --max-num-seqs 4 --max-num-batched-tokens 4096 --gpu-memory-utilization 0.83 \
+  --enable-prefix-caching --tokenizer-mode deepseek_v4 \
+  --tool-call-parser deepseek_v4 --enable-auto-tool-choice \
+  --reasoning-parser deepseek_v4 \
+  --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}' \
+  --default-chat-template-kwargs.thinking=true \
+  --default-chat-template-kwargs.reasoning_effort=high \
+  --load-format instanttensor --moe-backend b12x --linear-backend b12x \
+  --attention-backend B12X --max-cudagraph-capture-size 48 \
+  --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}' \
+  --speculative-config '{"method":"dspark","num_speculative_tokens":6,"draft_sample_method":"probabilistic","attention_backend":"B12X"}'

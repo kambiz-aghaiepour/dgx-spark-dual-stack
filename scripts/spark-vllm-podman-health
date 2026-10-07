@@ -1,0 +1,11 @@
+#!/bin/bash
+# Wait up to 25 min for readiness, then report. Also usable manually: spark-vllm-podman-health
+for i in $(seq 1 150); do
+  curl -fsS http://localhost:8000/health >/dev/null 2>&1 && \
+  curl -fsS http://localhost:8000/v1/models >/dev/null 2>&1 && \
+  ping -c1 -W2 192.168.177.12 >/dev/null 2>&1 && {
+    echo "CLUSTER HEALTHY (attempt $i)"; exit 0; }
+  sleep 10
+done
+echo "CLUSTER NOT HEALTHY after 25 min" >&2
+exit 1

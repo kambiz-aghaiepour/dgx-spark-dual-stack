@@ -1,0 +1,16 @@
+# secrets / local state — never commit
+.env
+*.env.local
+*.token
+token
+*.pem
+*.key
+# weights / caches / outputs
+*.safetensors
+*.gguf
+.cache/
+models/*
+# local junk
+*.log
+.DS_Store
+__pycache__/

@@ -1,0 +1,60 @@
+#!/bin/bash
+set -euo pipefail
+export CONTAINER_RT=podman
+export VLLM_SPARK_NOFILE_LIMIT=500000   # systemd user service hard-caps RLIMIT_NOFILE at 500000
+CONF="${SPARK_VLLM_MODEL_CONF:-$HOME/.config/spark-vllm/model.conf}"
+[ -f "$CONF" ] || { echo "model.conf not found: $CONF"; exit 1; }
+. "$CONF"
+FLAGS_FILE="${FLAGS_FILE:-$HOME/.config/spark-vllm/flags/deepseek-v4.conf}"
+[ -f "$FLAGS_FILE" ] || { echo "flags file not found: $FLAGS_FILE"; exit 1; }
+mapfile -t SERVE_FLAGS < "$FLAGS_FILE"
+# Optional per-model env file (same basename as the flags, .env suffix):
+# model-specific knobs (e.g. VLLM_TRITON_FORCE_FIRST_CONFIG for this model).
+ENVS="${FLAGS_FILE%.conf}.env"
+[ -f "$ENVS" ] && . "$ENVS"
+
+# --- Dual-stack dispatch ---------------------------------------------------
+# Each model launches its own inference stack (see dual-stack-integration-plan):
+# Qwen3.8-Flash-Next-NVFP4 -> model-native stock-vLLM engine (MiaAI runbook,
+# podman-adapted) via miaai_launch.sh; anything else -> the DeepSeek/b12x
+# launch-cluster path below (byte-identical to before).
+case "$MODEL_ID" in
+  *Qwen3.8-Flash-Next-NVFP4*) exec "$HOME/.local/bin/miaai_launch.sh" ;;
+esac
+cd /home/kambiz/spark-vllm-docker
+
+# Boot guard: wait until this node's CX-7 IPs and the worker are reachable (max 15 min)
+for i in $(seq 1 90); do
+  ip -4 addr show | grep -q 192.168.177.11 && ssh -o BatchMode=yes -o ConnectTimeout=5 gx10-02 true && break
+  sleep 10
+done
+
+# Forward per-model env lines (from <flags>.env) into the container. The
+# heredoc-style launch-cluster start below otherwise only gets the explicit
+# -e flags; without this, vars like VLLM_TRITON_FORCE_FIRST_CONFIG silently
+# never reach the engine (the bug this dual-stack move also fixes).
+ENV_ARGS=()
+if [ -f "$ENVS" ]; then
+  while IFS= read -r line; do
+    case "$line" in ''|\#*) continue ;; esac
+    ENV_ARGS+=(-e "$line")
+  done < "$ENVS"
+fi
+
+./launch-cluster.sh -d -t vllm-node-b12x \
+  --apply-mod mods/instanttensor-hybrid-draft-loader \
+  --apply-mod mods/busy-loop-fix \
+  -e CUTE_DSL_ARCH=sm_121a -e VLLM_USE_AOT_COMPILE=1 \
+  -e VLLM_USE_BREAKABLE_CUDAGRAPH=0 \
+  -e VLLM_USE_MEGA_AOT_ARTIFACT=1 -e VLLM_USE_FLASHINFER_SAMPLER=1 \
+  -e VLLM_USE_B12X_WO_PROJECTION=1 -e VLLM_USE_B12X_MHC=1 \
+  -e VLLM_USE_B12X_FP8_GEMM=1 -e VLLM_USE_B12X_MOE=1 \
+  -e VLLM_USE_B12X_SPARSE_INDEXER=1 -e VLLM_USE_V2_MODEL_RUNNER=1 \
+  -e VLLM_ENGINE_ITERATION_TIMEOUT_S=600 \
+  -e VLLM_MOE_SKIP_PADDING=0 -e B12X_MLA_SM120_UNIFIED=1 -e B12X_MOE_FORCE_A8=1 \
+  -e UCX_MEM_MMAP_HOOK_MODE=none -e UCX_RCACHE_MAX_UNRELEASED=1024 \
+  "${ENV_ARGS[@]+"${ENV_ARGS[@]}"}" \
+  start
+
+exec ./launch-cluster.sh exec vllm serve "$MODEL_ID" \
+  --served-model-name "$SERVED_MODEL_NAME" "${SERVE_FLAGS[@]}"
