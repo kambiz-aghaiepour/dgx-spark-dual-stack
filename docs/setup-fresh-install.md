@@ -96,8 +96,11 @@ huggingface-cli login                      # or export HF_TOKEN=hf_xxx
 hf download --token "$HF_TOKEN" deepseek-ai/DeepSeek-V4-Flash-Vision-Exp --local-dir ~/.cache/huggingface/hub/...
 # Qwen3.8-Flash-Next (native stack):
 hf download --token "$HF_TOKEN" nvidia/Qwen3.8-Flash-Next-NVFP4 --local-dir ~/.cache/huggingface/hub/...
-# copy to worker (the runbook's rsync does this if started without --launch):
-rsync -a ~/.cache/huggingface/ gx10-02:~/.cache/huggingface/
+# copy to worker (use -L or tar -ch: rsync -a alone only copies the HF cache
+# symlinks, NOT the blob bytes — verified pitfall on this kit):
+rsync -aL ~/.cache/huggingface/ gx10-02:~/.cache/huggingface/
+# (or, streaming over the CX7 mesh using real bytes, keeping paths intact:)
+# tar -chf - ~/.cache/huggingface | ssh 192.168.177.12 "tar -C ~ -xf -"
 ```
 
 ## 6. DeepSeek/b12x stack
