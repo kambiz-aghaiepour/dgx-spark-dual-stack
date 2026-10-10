@@ -95,6 +95,23 @@ between identical runs. Direction matches "uncensored is a bit slower" (small,
 noise-level at shallow depth); quality impacts (abliteration) are not measured
 by this bench.
 
+### Same pair on kernel 7.0.0-1019 (fills the matrix corner, 2026-10-10)
+
+| Metric | stock | keys (uncensored) | Δ keys |
+|---|---|---|---|
+| Decode @ d0 | 45.51 ± 6.34 (peak 68.3) | 45.73 ± 6.33 (peak 68.7) | **+0.5% (identical)** |
+| Decode @ 8K | 37.80 ± 1.93 (peak 57.7) | 41.15 ± 3.93 (peak 67.3) | **+8.9% (keys ahead)** |
+
+**Revised conclusion across the whole matrix:** on this kit there is **no
+measurable throughput difference between the stock and uncensored (keys)
+checkpoints** — d0 is identical on 7.0, and the 6.17 deltas (2.9–10%) sit
+inside the run-to-run variance (keys@6.17 @8K itself varied 34.5↔40.8 across
+two identical runs). If the uncensored is perceived as "less performant," the
+difference is in behavior/quality, not raw decode speed. Kernel-wise: the
+6.17 d0 means are consistently a few percent lower than 7.0 (7.7% stock,
+10.8% keys) but always within the noise bands; at 8K, 6.17 was ahead on
+stock (+1.4%) — **the claimed 7.x penalty remains unsupported**.
+
 ## Reproducing
 
 ```bash
