@@ -64,6 +64,37 @@ Notes:
   aggregate** (64K ctx, 16 users) — the native stack delivers ~6.8× that at
   the same box.
 
+## Kernel A/B: 6.17.0-1032 vs 7.0.0-1019 (2026-10-10)
+
+Same hardware, same native stack, same recipe — the running kernel is the only
+variable. Both kernels are Ubuntu `-nvidia` flavor (DGX OS, Ubuntu 24.04 noble);
+driver 580.178.04 / CUDA 13.0 on both; 6.17 required the per-kernel
+`linux-modules-nvidia-580-open-*` package (the kernel package alone does NOT
+carry the NVIDIA modules — first boot without it fails `nvidia-smi`).
+
+| Metric (stock Qwen3.8-Flash-Next-NVFP4) | 7.0.0-1019 | 6.17.0-1032 | Δ 6.17 |
+|---|---|---|---|
+| Decode @ d0 | 45.51 ± 6.34 (peak 68.3) | 42.00 ± 2.34 (peak 69.7) | −7.7% mean / +2% peak |
+| Decode @ 8K | 37.80 ± 1.93 (peak 57.7) | 38.33 ± 0.36 (peak 62.0) | +1.4% mean / +7.5% peak |
+| Prefill @d0 / @8K (TTFT) | 2871 / 3600 (3.16 s) | 2871 / 3170 (3.07 s) | ≈ / −3% TTFT |
+
+**Conclusion: the claimed "7.x performance hit" did not reproduce.** The d0
+delta is inside the 7.0 baseline's own ±6.34 run variance; at depth 6.17 is
+marginally ahead. Both are single bench sessions (runs=3 each).
+
+## Uncensored vs stock on the same kernel (6.17, 2026-10-10)
+
+| Metric | stock | keys (uncensored) | Δ keys |
+|---|---|---|---|
+| Decode @ d0 | 42.00 ± 2.34 (peak 69.7) | 40.78 ± 3.60 (peak 63.0) | −2.9% mean / −9.6% peak |
+| Decode @ 8K | 38.33 ± 0.36 (peak 62.0) | 34.50 ± 3.24 (peak 50.0)* | −10% (run variance 34.5↔40.8) |
+| Prefill | ≈ | ≈ / lower @ d0 | mixed |
+
+*run-to-run spread at depth for the keys checkpoint is wide: 34.5 vs 40.8
+between identical runs. Direction matches "uncensored is a bit slower" (small,
+noise-level at shallow depth); quality impacts (abliteration) are not measured
+by this bench.
+
 ## Reproducing
 
 ```bash
