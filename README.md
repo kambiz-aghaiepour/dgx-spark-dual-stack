@@ -131,26 +131,52 @@ stall (b12x engine, flaky on this kit), `shm_broadcast` warning semantics,
 conmon teardown noise, page-cache OOM race, reasoning-model null-content probe
 note.
 
-## Uncensored model variants (research / educational use)
+## Model inventory — deployed vs evaluated
 
-Both model lines have uncensored (abliterated) variants. They are gated on
-Hugging Face: **accept the repository terms on the web page first** (click
-*"Agree and access repository"*), then provide a token (read scope —
-`huggingface-cli login` or `HF_TOKEN`). **These variants are provided for
-research and educational purposes; users are responsible for lawful use and
-for the upstream terms of the base models.**
+### Deployed (what this cluster actually runs)
 
-| Variant | Access | How to select |
-|---|---|---|
-| DeepSeek: `orcarouter/DeepSeek-V4-Flash-Vision-Uncensored` (base: official `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`) | gated → accept terms + token | `vllm-model-set orcarouter/DeepSeek-V4-Flash-Vision-Uncensored --apply` (same b12x engine, `flags/deepseek-v4.conf`) |
-| Qwen: `drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47` (base: `nvidia/Qwen3.8-Flash-Next-NVFP4`) | gated → accept terms + token | served via the runbook's `ABLIT=1`: `vllm-model-set drowzeys/keys-…L3-47 [alias] --apply` (same native engine; per-model env `flags/drowzeys-…-house-qsa-.env` carries `ABLIT=1`) |
+| Model | Hugging Face URL | Type | Access | Size | Engine stack |
+|---|---|---|---|---|---|
+| `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp` | https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-Vision-Exp | Official DeepSeek (open weights) | open | 156.3 GB | b12x |
+| `nvidia/Qwen3.8-Flash-Next-NVFP4` | https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4 | Official Qwen — NVIDIA-published NVFP4 quant; upstream base https://huggingface.co/Qwen/Qwen3.8-Flash-Next | open | 123.6 GB | native (MiaAI) |
+| `orcarouter/DeepSeek-V4-Flash-Vision-Uncensored` | https://huggingface.co/orcarouter/DeepSeek-V4-Flash-Vision-Uncensored | Uncensored (abliterated) DeepSeek; base = official V4-Flash-Vision-Exp | **gated** — accept terms, then token | 156.3 GB | b12x |
+| `drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47` | https://huggingface.co/drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47 | Uncensored (abliterated) Qwen; base = `nvidia/Qwen3.8-Flash-Next-NVFP4` | **gated auto** — accept terms, then token | 123.6 GB | native (MiaAI, `ABLIT=1`) |
 
-Notes:
-- Gated downloads: use `HF_HUB_DISABLE_XET=1` if you get a `403: this repo is gated`
-  despite granted access (Xet storage auth issue — see troubleshooting §8).
-- The Qwen runbook's download/start flows honor `ABLIT=1` (weights download
-  first, then `start.sh --launch`); the DeepSeek variant is a plain
-  `vllm-model-set` switch.
+How each uncensored variant is selected:
+- DeepSeek: `vllm-model-set orcarouter/DeepSeek-V4-Flash-Vision-Uncensored --apply`
+  (same b12x engine, `flags/deepseek-v4.conf`).
+- Qwen: the MiaAI runbook's `ABLIT=1` flow — per-model env
+  `flags/drowzeys-…-house-qsa-.env` carries `ABLIT=1`; the runbook downloads
+  the gated checkpoint first, then serves it on the native engine.
+
+### Evaluated but NOT deployed
+
+| Model | Why it was not deployed |
+|---|---|
+| `orcarouter/Qwen3.8-Flash-Next-Uncensored` (+ `-NVFP4` / `-FP8` / `-GGUF` / `-MLX`) | The other uncensored Qwen line. We evaluated it while choosing an uncensored Qwen and selected the drowzeys `ABLIT=1` checkpoint instead — the MiaAI runbook targets it natively. Never pulled or served here. Links: https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored |
+| `orcarouter/DeepSeek-V4-Flash-Vision-Uncensored-MLX` / `-GGUF` | Format variants of the uncensored DeepSeek we *do* run — other runtimes (MLX/llama.cpp), not our engine. |
+| `deepseek-ai/DeepSeek-V4.1-Flash` | Official V4.1 — **510 GB FP8; cannot fit** 2×128 GB unified memory (the evaluated V4.1 uncensored shares this problem in vLLM form). https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash |
+| `orcarouter/DeepSeek-V4.1-Flash-Uncensored-MLX` | V4.1 uncensored — MLX-only (Apple Silicon), 0 downloads, no vLLM/transformers build → not runnable on this cluster. |
+| `Qwen/Qwen3.8-27B` | Flags profile exists on the node only; weights never downloaded (profile-only). |
+| (`nvidia-MiniMax-M3-NVFP4`) | Local config only; never registered on the cluster. |
+
+### About the `red-teaming` / `ai-red-team` tags
+
+Abliterated ("uncensored") checkpoints are published with HF card tags such as
+**`ai-red-team`** and **`red-teaming`** to signal intended use: adversarial
+evaluation of refusal behavior and research. These are **publisher-added
+metadata** — visible as tag chips on the model's HF page (e.g. the
+`drowzeys/keys-…L3-47` card and the `orcarouter/…-Uncensored` card) and in the
+model API's `tags` field. Treat them as a purpose signal, not a classification
+by this project. **These variants are provided for research and educational
+purposes; users are responsible for lawful use and the upstream terms of the
+base models.**
+
+Getting either uncensored model: **accept the repository terms on the HF page
+first** (click *"Agree and access repository"*), then provide a token (read
+scope — `huggingface-cli login` or `HF_TOKEN`). If a gated download 403s
+despite granted access, use `HF_HUB_DISABLE_XET=1` (Xet storage auth issue —
+see troubleshooting §8).
 
 ## Machine-state files (not versioned)
 
