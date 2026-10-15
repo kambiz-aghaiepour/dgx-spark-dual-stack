@@ -1,0 +1,11 @@
+[Unit]
+Description=Prometheus node exporter (DGX Spark)
+After=network.target
+
+[Service]
+ExecStart=%h/bin/node_exporter --web.listen-address=:9100 --collector.systemd --collector.ethtool --collector.hwmon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

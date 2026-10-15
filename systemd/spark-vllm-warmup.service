@@ -1,0 +1,11 @@
+[Unit]
+Description=Warm up DeepSeek V4 Flash Vision Exp MM kernels after engine start
+After=spark-vllm-podman.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/spark-vllm-warmup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

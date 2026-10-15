@@ -1,0 +1,40 @@
+# DGX Power Alert — Pushover when the smart plugs are OFF
+# Install into /config/automations.yaml inside the homeassistant container
+# (requires the Pushover integration: notify.pushover).
+#
+# Rules per request:
+#   - alert only when a plug has been OFF for >= 5 minutes  (trigger `for:`)
+#   - at most one alert per 4 hours                         (last_triggered template)
+#   - only between 08:00 and 20:00                          (time condition, HA timezone)
+#   - no re-powering (alert-only)
+#
+# Note: `unavailable` state is intentionally NOT alerted (only `off`), per request.
+- id: dgx_power_alert
+  alias: "DGX Power Alert"
+  description: "Pushover if Smart Plug 1/2 is OFF for 5+ min; once per 4h; 08:00-20:00."
+  mode: restart
+  trigger:
+    - platform: state
+      entity_id:
+        - switch.smart_plug_1
+        - switch.smart_plug_2
+      to: "off"
+      for: "00:05:00"
+  condition:
+    - condition: time
+      after: "08:00:00"
+      before: "20:00:00"
+    - condition: template
+      value_template: >-
+        {% set last = state_attr('automation.dgx_power_alert', 'last_triggered') %}
+        {{ last is none or (now() - last).total_minutes() > 240 }}
+  action:
+    - service: notify.pushover
+      data:
+        title: "DGX Power Alert"
+        message: >-
+          {% set offs = ['Smart Plug 1' if is_state('switch.smart_plug_1', 'off') else none,
+                         'Smart Plug 2' if is_state('switch.smart_plug_2', 'off') else none] | select | join(', ') %}
+          {{ offs }} OFF for over 5 minutes ({{ now().strftime('%H:%M') }}). DGX cluster is down until power is restored.
+        priority: 1
+        sound: siren

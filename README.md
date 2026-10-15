@@ -46,9 +46,12 @@ mesh — see [docs/setup-fresh-install.md](docs/setup-fresh-install.md).
 scripts/            deployment + switching + supervision scripts (see below)
 config/model.conf.template
 config/flags/       per-model flags files (vLLM serve args) + per-model .env
-systemd/            user units + the override.conf that wires start-select
-docs/               fresh-install, architecture notes, benchmarking, troubleshooting
-tools/              extra tooling (benchmark harness)
+systemd/            user units (podman/health/warmup, optional exporters)
+                    + the override.conf that wires start-select
+docs/               fresh-install, architecture notes, benchmarking,
+                    troubleshooting, observability
+dashboards/         Grafana dashboard pack + Home Assistant power alert
+tools/              extra tooling (benchmark harness, sweep)
 ```
 
 ### Scripts (all installed to `~/.local/bin` by `scripts/deploy.sh`)
@@ -127,6 +130,42 @@ See [docs/troubleshooting.md](docs/troubleshooting.md) — FlashInfer autotune
 stall (b12x engine, flaky on this kit), `shm_broadcast` warning semantics,
 conmon teardown noise, page-cache OOM race, reasoning-model null-content probe
 note.
+
+## Uncensored model variants (research / educational use)
+
+Both model lines have uncensored (abliterated) variants. They are gated on
+Hugging Face: **accept the repository terms on the web page first** (click
+*"Agree and access repository"*), then provide a token (read scope —
+`huggingface-cli login` or `HF_TOKEN`). **These variants are provided for
+research and educational purposes; users are responsible for lawful use and
+for the upstream terms of the base models.**
+
+| Variant | Access | How to select |
+|---|---|---|
+| DeepSeek: `orcarouter/DeepSeek-V4-Flash-Vision-Uncensored` (base: official `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`) | gated → accept terms + token | `vllm-model-set orcarouter/DeepSeek-V4-Flash-Vision-Uncensored --apply` (same b12x engine, `flags/deepseek-v4.conf`) |
+| Qwen: `drowzeys/keys-Qwen3.8-Flash-Next-NVFP4-dual-ablit-house-qsa-L3-47` (base: `nvidia/Qwen3.8-Flash-Next-NVFP4`) | gated → accept terms + token | served via the runbook's `ABLIT=1`: `vllm-model-set drowzeys/keys-…L3-47 [alias] --apply` (same native engine; per-model env `flags/drowzeys-…-house-qsa-.env` carries `ABLIT=1`) |
+
+Notes:
+- Gated downloads: use `HF_HUB_DISABLE_XET=1` if you get a `403: this repo is gated`
+  despite granted access (Xet storage auth issue — see troubleshooting §8).
+- The Qwen runbook's download/start flows honor `ABLIT=1` (weights download
+  first, then `start.sh --launch`); the DeepSeek variant is a plain
+  `vllm-model-set` switch.
+
+## Machine-state files (not versioned)
+
+`locked.conf` (model registry), the live `~/.config/spark-vllm/model.conf`,
+and `~/.config/spark-vllm-watchdog.conf` are per-cluster state — **intentionally
+not in this repo**. The templates and defaults live under `config/`; scripts
+(notably `vllm-model-set`) manage the live files.
+
+## Monitoring & alerting
+
+The cluster also runs `node-exporter` + `nvidia-gpu-exporter` user units, a
+Grafana dashboard pack, and a Home-Assistant power alert — see
+[docs/observability.md](docs/observability.md) (units packaged under `systemd/`,
+dashboards under `dashboards/`; Prometheus/Grafana/Home Assistant themselves
+are out of scope and referenced only).
 
 ## References (credit)
 

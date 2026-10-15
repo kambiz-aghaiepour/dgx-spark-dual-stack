@@ -15,6 +15,7 @@ install -m 0755 "$HERE"/scripts/{spark-vllm-podman-start-select,spark-vllm-podma
   "$HOME/.local/bin/"
 install -m 0644 "$HERE"/scripts/{vllm-model-select.py,vllm-model-add.py} "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-evict-cache.py "$HOME/.local/bin/"
+install -m 0755 "$HERE"/scripts/spark-vllm-warmup.sh "$HOME/"
 ln -sf "$HOME/.local/bin/vllm-model-select.py" "$HOME/.local/bin/vllm-model-select"
 
 echo "==> installing config -> ~/.config/spark-vllm"
@@ -26,9 +27,12 @@ echo "==> installing systemd user units (head)"
 mkdir -p "$HOME/.config/systemd/user/spark-vllm-podman.service.d"
 install -m 0644 "$HERE"/systemd/spark-vllm-podman.service "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/spark-vllm-health.service "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE"/systemd/spark-vllm-warmup.service "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE"/systemd/{node-exporter,nvidia-gpu-exporter}.service "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/override.conf "$HOME/.config/systemd/user/spark-vllm-podman.service.d/"
 systemctl --user daemon-reload
 echo "    start-select dispatch wired via override.conf (head only)"
+echo "    warmup service packaged; optional exporters: systemctl --user enable --now node-exporter nvidia-gpu-exporter"
 
 if [ "${1:-}" = "--all" ]; then
   echo "==> syncing scripts to worker ($HOST_ALIAS)"

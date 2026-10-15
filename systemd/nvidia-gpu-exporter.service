@@ -1,0 +1,11 @@
+[Unit]
+Description=NVIDIA GPU exporter (DGX Spark GB10)
+After=network.target
+
+[Service]
+ExecStart=%h/bin/nvidia_gpu_exporter --web.listen-address=:9835
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
