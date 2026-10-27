@@ -80,13 +80,35 @@ ExecStart=/home/kambiz/.local/bin/spark-vllm-podman-start-select
 
 ## 4. Install scripts
 
+Clone the docker fork first — `deploy.sh` installs the launcher mods into it:
+
 ```bash
-./scripts/deploy.sh            # installs scripts + config on this node (head)
-./scripts/deploy.sh --all      # also push runbook/image step to worker (see below)
+git clone https://github.com/kambiz-aghaiepour/spark-vllm-docker.git ~/spark-vllm-docker
 ```
 
-`deploy.sh` copies `scripts/` to `~/.local/bin`, `config/` to
-`~/.config/spark-vllm/` and re-reads model.conf from the template.
+Then deploy:
+
+```bash
+./scripts/deploy.sh            # scripts + venv + config + units + mods (head)
+./scripts/deploy.sh --all      # also push runtime helpers to the worker (see below)
+./scripts/deploy.sh --skip-mods    # scripts only (no docker fork on this host yet)
+./scripts/deploy.sh --force-config # replace an existing model.conf with the template
+```
+
+`deploy.sh` copies `scripts/` to `~/.local/bin` and `config/` to
+`~/.config/spark-vllm/`, then:
+
+- builds the selector venv (`~/.local/share/vllm-tui/venv`, `urwid==4.2.5`) via
+  `scripts/setup-tui-venv.sh` and installs `vllm-model-select` as a **wrapper**
+  around `vllm-model-select.py` — system python has no `urwid`, so a symlink to
+  the `.py` would break both `--status` and the TUI;
+- installs `scripts/mods/busy-loop-fix` into `~/spark-vllm-docker/mods/` (the
+  launch script applies it on every start; `instanttensor-hybrid-draft-loader`
+  must already be there from the fork) and fails early with a clear message if
+  the fork is missing or stale;
+- writes `model.conf` from `config/model.conf.template` **only if it does not
+  exist yet** — on an existing head the live selection is kept, so re-running the
+  installer cannot silently change the boot default.
 
 ## 5. Weights (HF token)
 
@@ -138,9 +160,14 @@ pulled once on the head and synced to the worker by the runbook.
 ## 8. Verify
 
 ```bash
+./scripts/verify-deployment.sh  # repo vs installed artifacts, wrapper, urwid, mods, units
 vllm-model-select --status      # model.conf / service / watchdog / live engine
 curl -s http://127.0.0.1:8000/v1/models
 ```
+
+`verify-deployment.sh` is read-only and safe on a serving head; exit 0 means the
+installed layout matches the checkout (see
+[docs/runtime-parity.md](runtime-parity.md) for what it checks).
 
 ## Expected timings (this kit)
 
