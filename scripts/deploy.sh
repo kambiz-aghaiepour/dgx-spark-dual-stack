@@ -41,6 +41,8 @@ install -m 0644 "$HERE"/scripts/{vllm-model-select.py,vllm-model-add.py} "$HOME/
 # the archive helper is also executed directly (over ssh from the head), so it
 # needs the executable bit and its shebang, not just python importability
 install -m 0755 "$HERE"/scripts/vllm-model-archive.py "$HOME/.local/bin/"
+# and the name the docs / ssh one-liners use
+install -m 0755 "$HERE"/scripts/vllm-model-archive "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-evict-cache.py "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-warmup.sh "$HOME/"
 
@@ -98,8 +100,8 @@ if [ "$ALL" = 1 ]; then
   scp -q "$HERE"/scripts/{spark-vllm-podman-stop,miaai_launch.sh,vllm-model-set} "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
   # the archive tool is per node: each spark has its own disk and its own
   # ARCHIVE_PATH, so the worker gets the helper too (configure it there).
-  scp -q "$HERE"/scripts/vllm-model-archive.py "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
-  ssh -o BatchMode=yes "$HOST_ALIAS" 'chmod 755 ~/.local/bin/vllm-model-archive.py' 2>/dev/null || true
+  scp -q "$HERE"/scripts/{vllm-model-archive.py,vllm-model-archive} "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
+  ssh -o BatchMode=yes "$HOST_ALIAS" 'chmod 755 ~/.local/bin/vllm-model-archive.py ~/.local/bin/vllm-model-archive' 2>/dev/null || true
   echo "    (worker only needs runtime helpers; full launch is driven from head)"
   echo "    (worker archive: ssh $HOST_ALIAS vllm-model-archive --set-path /archive)"
 fi

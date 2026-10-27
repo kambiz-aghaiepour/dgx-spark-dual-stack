@@ -127,6 +127,7 @@ echo
 echo "-- archive tool"
 if [ -e "$BIN/vllm-model-archive.py" ]; then
   check_file "$HERE/scripts/vllm-model-archive.py" "$BIN/vllm-model-archive.py"
+  check_file "$HERE/scripts/vllm-model-archive" "$BIN/vllm-model-archive"
   if arc_json="$(python3 "$BIN/vllm-model-archive.py" --status --json 2>&1)"; then
 
     arc_lines="$(printf '%s' "$arc_json" | python3 -c '

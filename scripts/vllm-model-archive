@@ -1,0 +1,9 @@
+#!/bin/sh
+# vllm-model-archive - run the archive helper with this node's system python.
+#
+# The helper is stdlib-only, so unlike vllm-model-select it needs no urwid venv.
+# It lives next to this wrapper as vllm-model-archive.py; the head reaches the
+# worker's copy over ssh by that path, so keep the two names together.
+set -e
+here=$(dirname "$(readlink -f "$0")")
+exec python3 "$here/vllm-model-archive.py" "$@"
