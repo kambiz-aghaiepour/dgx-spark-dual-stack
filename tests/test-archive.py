@@ -35,19 +35,21 @@ def check(name, cond, detail=""):
         fails.append(name)
 
 
-def env_for(home, cluster=True):
+def env_for(home, cluster=True, extra=None):
     env = dict(os.environ, HOME=home, SPARK_VLLM_ENGINE_URL="http://127.0.0.1:9")
     if cluster:
         env.setdefault("SPARK_VLLM_REMOTE_CMD", SHIM + " {host} {helper} {args}")
         env.setdefault("SPARK_VLLM_ARCHIVE_HELPER", HELPER)
         env.setdefault("FAKE_NODE_HOME", WORK_HOME)
         env.setdefault("WORKER", "worker")
+    if extra:
+        env.update(extra)
     return env
 
 
-def run(*args, home=HEAD_HOME, expect=0, cluster=True):
+def run(*args, home=HEAD_HOME, expect=0, cluster=True, extra=None):
     r = subprocess.run([sys.executable, HELPER, *args], capture_output=True, text=True,
-                       env=env_for(home, cluster))
+                       env=env_for(home, cluster, extra))
     if expect is not None and r.returncode != expect:
         print(f"   !! {args} -> rc={r.returncode}\n   stdout={r.stdout[:700]}\n   stderr={r.stderr[:400]}")
     return r
@@ -116,7 +118,26 @@ def main():
     work_hub = build(WORK_HOME, {"org/alpha": (3, 16384), "org/beta": (1, 8192),
                                 "org/delta": (1, 4096)})
 
+    # --- an /archive mount is offered, but is not "configured" by itself
+    rc, res = jrun("--status", home=WORK_HOME, cluster=False,
+                   extra={"SPARK_VLLM_DEFAULT_ARCHIVE": "/dev/shm"})
+    check("detected mount is suggested", res.get("suggested_path") == "/dev/shm",
+          res.get("suggested_path"))
+    check("detected mount does not configure", res.get("configured") is False, res)
+
     # --- per-node configuration
+    rc, res = jrun("--set-path", WORK_ARCH, "--node", "worker")
+    check("set-path on the worker from the head",
+          rc == 0 and res.get("nodes", {}).get("worker", {}).get("ok") is True, res)
+    with open(os.path.join(WORK_HOME, ".config/spark-vllm/archive.conf")) as f:
+        check("worker archive.conf written", f"ARCHIVE_PATH={WORK_ARCH}" in f.read())
+    rc, res = jrun("--set-path", "/nonexistent/archive", "--node", "worker", expect=2)
+    check("bad worker path refused, naming the node",
+          rc == 2 and "worker" in res.get("error", ""), res)
+    rc, res = jrun("--set-path", HEAD_ARCH, "--node", "all")
+    check("set-path --node all configures both",
+          rc == 0 and set(res.get("nodes", {})) == {"head", "worker"}, res)
+
     rc, res = jrun("--set-path", HEAD_ARCH, home=HEAD_HOME, cluster=False)
     check("head set-path", rc == 0 and res.get("path") == HEAD_ARCH, res)
     rc, res = jrun("--set-path", WORK_ARCH, home=WORK_HOME, cluster=False)

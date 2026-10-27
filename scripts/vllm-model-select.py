@@ -313,6 +313,8 @@ class Selector:
         self.confirming = False
         self.confirming_del = False
         self.confirming_arch = False
+        self.confirming_worker_path = []
+        self.path_pending = ""
         self.del_target = ""
         self.arch_target = ""
         self.bg = None
@@ -417,7 +419,8 @@ class Selector:
                     if info.get("mounted") else ", archive n/a")
             parts.append(seg)
         if not self.arch.get("configured"):
-            parts.append("p to set the archive path")
+            sug = self.arch.get("suggested_path")
+            parts.append(f"{sug} detected - p to enable" if sug else "p to set the archive path")
         lines = [f" vllm-model-select | current: {self.conf.get('MODEL_ID', '')} as "
                  f"{self.conf.get('SERVED_MODEL_NAME', '')} | {n_cache} cached, {n_arch} archived",
                  " " + " | ".join(parts)]
@@ -594,15 +597,40 @@ class Selector:
     def edit_archive_path(self):
         self.editing_path = True
         self.loop.screen.set_mouse_tracking(False)
-        edit = urwid.Edit("archive path: ", self.arch.get("archive_path") or "/archive")
+        configured = self.arch.get("archive_path") or ""
+        suggested = self.arch.get("suggested_path") or ""
+        edit = urwid.Edit("archive path: ", configured or suggested or "/archive")
         self._path_edit = edit
+        if configured:
+            title = "archive path - enter=save, esc=cancel"
+        elif suggested:
+            # detected, not configured: still the user's decision
+            title = f"{suggested} is mounted here - enter to enable, esc=cancel"
+        else:
+            title = "archive path - enter=save, esc=cancel"
         self.loop.widget = urwid.Overlay(
-            urwid.LineBox(urwid.Filler(edit),
-                          title="archive path - enter=save, esc=cancel"),
-            self.frame, "center", ("relative", 70), "middle", 3)
+            urwid.LineBox(urwid.Filler(edit), title=title),
+            self.frame, "center", ("relative", 78), "middle", 3)
         return True
 
     def keypress(self, key):
+        if self.confirming_worker_path:
+            targets = self.confirming_worker_path
+            self.confirming_worker_path = []
+            self.loop.widget = self.frame
+            self.loop.screen.set_mouse_tracking(self.capture)
+            if key in ("y", "Y"):
+                parts = []
+                for n in targets:
+                    r = archive_call("--set-path", self.path_pending, "--node", n, timeout=180)
+                    parts.append(f"{n}: " + (f"ok, {human(r.get('free_bytes'))} free"
+                                             if r.get("ok") else str(r.get("error"))))
+                self.msg = "archive path - " + "; ".join(parts)
+            else:
+                self.msg = (f"archive path set on this node only "
+                            f"({', '.join(targets)} unchanged)")
+            self.reload()
+            return True
         if self.confirming_arch:
             self.confirming_arch = False
             self.loop.widget = self.frame
@@ -622,6 +650,23 @@ class Selector:
                 res = archive_call("--set-path", path)
                 if res.get("ok"):
                     self.msg = f"archive path: {res['path']} ({human(res.get('free_bytes'))} free)"
+                    self.reload()
+                    others = [n for n in node_order(self.arch)
+                              if n != (self.arch.get("local_node") or "head")]
+                    if others and not self.arch.get("error"):
+                        self.path_pending = res["path"]
+                        self.confirming_worker_path = others
+                        self.loop.screen.set_mouse_tracking(False)
+                        self.loop.widget = urwid.Overlay(
+                            urwid.LineBox(urwid.Filler(urwid.Text(
+                                f"Also set the archive path on "
+                                f"{', '.join(others)}?\n\n"
+                                f"  {res['path']}\n\n"
+                                f"Each node needs its own disk mounted there and its\n"
+                                f"own archive.conf; nothing is assumed. [y/N]",
+                                align="center"))),
+                            self.frame, "center", ("relative", 70), "middle", 8)
+                        return True
                 else:
                     self.msg = f"cannot use {path}: {res.get('error')}"
                 self.reload()
@@ -856,7 +901,10 @@ def run_status():
             print(f"archive[{n}]: {info.get('error', 'unavailable')}")
             continue
         if not info.get("configured"):
-            print(f"archive[{n}]: not configured (--set-archive-path /archive there)")
+            hint = (f" - {info['suggested_path']} is mounted there; enable it with p"
+                    if info.get("suggested_path") else
+                    " - mount the disk and run --set-archive-path")
+            print(f"archive[{n}]: not configured{hint}")
             continue
         mount = "mounted" if info.get("mounted") else "NOT MOUNTED"
         free = human(info.get("archive_free_bytes")) if info.get("archive_free_bytes") else "?"

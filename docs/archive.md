@@ -53,21 +53,40 @@ findmnt /archive && df -h /archive
 
 ## 2. Configure (each node separately)
 
-On the head:
+Configuration stays a per-node decision: **a mounted disk is not a configured
+node.** The tool checks `archive.conf`, not the mount, so a fresh `/archive`
+that nobody enabled still refuses to archive — that is the prerequisite.
+
+In the TUI, `p` does the whole job:
+
+1. The prompt is prefilled with this node's path, or — if nothing is configured
+   and `/archive` is detected as a real mount here (a separate filesystem from
+   the cache, writable) — with `/archive`, titled
+   `"/archive is mounted here - enter to enable"`.
+2. On save it writes this node's `archive.conf`.
+3. On a multi-node view it then asks
+   `"Also set the archive path on worker?"`, showing the path. `y` runs
+   `--set-path … --node worker` over ssh; `n` (the default) leaves the worker
+   untouched and says so.
+
+Detection only ever prefills the prompt: the header shows
+`/archive detected - p to enable` until you actually press `p`, and
+`--status` prints `/archive is mounted there; enable it with p`.
+
+From the shell — same operations, still one node unless you ask for more:
 
 ```bash
-vllm-model-archive --set-path /archive
-vllm-model-archive --status          # shows a line per node
+vllm-model-archive --set-path /archive                 # this node
+vllm-model-archive --set-path /archive --node worker   # the worker, over ssh
+vllm-model-archive --set-path /archive --node all      # both, reporting each
+vllm-model-archive --status                            # a line per node
 ```
 
 On the worker the helper has to exist first — `./scripts/deploy.sh --all` copies
 `vllm-model-archive.py` to `~/.local/bin` there and makes it executable (the head
-runs it over ssh):
-
-```bash
-ssh gx10-02 vllm-model-archive --set-path /archive
-ssh gx10-02 vllm-model-archive --status --local
-```
+runs it over ssh). `--set-path --node worker` fails loudly, naming the node, if
+the directory is missing, not writable, or on the same filesystem as that
+node's cache.
 
 Each node writes its own `~/.config/spark-vllm/archive.conf`:
 

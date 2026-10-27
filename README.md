@@ -105,9 +105,13 @@ Space is freed as soon as each node's copy is verified, and reported per node
 (the head's blobs are partly shared, the worker's copies are not).
 
 ```bash
-vllm-model-archive --set-path /archive    # on each node (press p in the TUI, or ssh)
+vllm-model-archive --set-path /archive    # on each node (--node worker|all, or p in the TUI)
 vllm-model-select                          # x: archive, u: unarchive, p: path
 ```
+
+`p` in the TUI prefills the prompt with `/archive` when that mount is detected,
+then offers to set the same path on the worker; detection alone never counts as
+configured, so each node still needs its own `--set-path` before `x` works.
 
 Unarchiving is pre-checked against free space on the internal filesystem and
 refuses with a list of models to archive first when it would not fit. The model

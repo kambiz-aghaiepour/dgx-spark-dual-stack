@@ -193,6 +193,42 @@ def main():
     with open(conf, "w") as f:
         f.write(keep)
 
+    # --- path prompt: a detected mount is offered, never assumed
+    conf = os.path.join(HOME, ".config/spark-vllm/archive.conf")
+    keep_conf = open(conf).read()
+    os.remove(conf)
+    os.environ["SPARK_VLLM_DEFAULT_ARCHIVE"] = "/dev/shm"
+    s5 = mod.Selector()
+    s5.frame = s.frame
+    s5.loop = stub_loop(mod)
+    check("detected mount is not configured", s5.arch.get("configured") is False, s5.arch)
+    check("header offers the detected mount", "/dev/shm" in s5.header_text(), s5.header_text())
+    s5.edit_archive_path()
+    check("path prompt prefills the detected mount",
+          s5._path_edit.get_edit_text() == "/dev/shm", s5._path_edit.get_edit_text())
+    s5.keypress("esc")
+    with open(conf, "w") as f:
+        f.write(keep_conf)
+    os.environ.pop("SPARK_VLLM_DEFAULT_ARCHIVE", None)
+
+    # --- saving the path on a two-node view asks about the worker
+    os.environ["SPARK_VLLM_NODES"] = "head,worker"
+    os.environ["SPARK_VLLM_REMOTE_CMD"] = "/bin/false {host} {helper} {args}"
+    s6 = mod.Selector()
+    s6.frame = s.frame
+    s6.loop = stub_loop(mod)
+    check("two-node view keeps a column per node",
+          s6.arch.get("node_order") == ["head", "worker"], s6.arch.get("node_order"))
+    s6.edit_archive_path()
+    s6.keypress("enter")
+    check("after saving, the worker path is offered",
+          s6.confirming_worker_path == ["worker"], (s6.confirming_worker_path, s6.msg))
+    s6.keypress("n")
+    check("declining leaves the worker alone",
+          "this node only" in s6.msg and not s6.confirming_worker_path, s6.msg)
+    os.environ.pop("SPARK_VLLM_NODES", None)
+    os.environ.pop("SPARK_VLLM_REMOTE_CMD", None)
+
     print()
     if fails:
         print(f"{len(fails)} FAILED: {fails}")

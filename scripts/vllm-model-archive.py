@@ -51,6 +51,9 @@ ARCHIVE_CONF = os.path.join(CONF_DIR, "archive.conf")
 MODEL_CONF = os.path.join(CONF_DIR, "model.conf")
 FLAGS_DIR = os.path.join(CONF_DIR, "flags")
 DEFAULT_MIN_FREE_GB = 10.0
+# offered as the default in the path prompt when it is a real mount; being
+# mounted does NOT mean configured - --set-path is still required per node
+DEFAULT_ARCHIVE = os.environ.get("SPARK_VLLM_DEFAULT_ARCHIVE", "/archive")
 
 
 # ---------------------------------------------------------------- config files
@@ -610,6 +613,19 @@ def service_active():
     return out
 
 
+def detected_archive_path():
+    """The conventional archive mount, if it exists here as a separate fs."""
+    cand = os.path.abspath(os.path.expanduser(DEFAULT_ARCHIVE))
+    try:
+        if (os.path.isdir(cand) and os.path.ismount(cand)
+                and os.stat(cand).st_dev != os.stat(CACHE_ROOT).st_dev
+                and os.access(cand, os.W_OK)):
+            return cand
+    except OSError:
+        pass
+    return ""
+
+
 def op_set_path(path):
     if not path:
         return 2, {"ok": False, "error": "empty path"}
@@ -642,6 +658,22 @@ def _read_manifest(adir):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def op_set_path_cluster(path, scope="all"):
+    """Write archive.conf on one or more nodes (the head drives the worker)."""
+    try:
+        nodes = node_names(scope)
+    except ValueError as e:
+        return 2, {"ok": False, "error": str(e)}
+    per = {}
+    for n in nodes:
+        _c, per[n] = call_node(n, ["--set-path", path, "--local"], timeout=180)
+    bad = [n for n, r in per.items() if not r.get("ok")]
+    if bad:
+        return 2, {"ok": False, "path": path, "nodes": per, "failed_nodes": bad,
+                   "error": "; ".join(f"{n}: {(per[n].get('error') or 'failed')}" for n in bad)}
+    return 0, {"ok": True, "path": path, "nodes": per}
 
 
 def archive_local(mid, stage="commit", dry_run=False):
@@ -979,6 +1011,7 @@ def _node_status_local():
     conf = archive_conf()
     out = {"ok": True, "node": LOCAL_NODE, "configured": bool(conf["path"]),
            "archive_path": conf["path"], "min_free_gb": conf["min_free_gb"],
+           "suggested_path": detected_archive_path(),
            "cache_root": CACHE_ROOT,
            "cache_free_bytes": shutil.disk_usage(CACHE_ROOT).free,
            "archived": sorted(scan_archived(conf["path"]))}
@@ -1004,7 +1037,8 @@ def op_status(scope="all"):
             _c, res = call_node(n, ["--status", "--local"], timeout=120)
             per[n] = res
     local = per.get(LOCAL_NODE) or next(iter(per.values()))
-    out = {"ok": True, "nodes": per, "node_order": nodes,
+    out = {"ok": True, "nodes": per, "node_order": nodes, "local_node": LOCAL_NODE,
+           "suggested_path": local.get("suggested_path", ""),
            "archive_path": local.get("archive_path", ""),
            "configured": bool(local.get("configured")),
            "min_free_gb": local.get("min_free_gb", DEFAULT_MIN_FREE_GB),
@@ -1037,6 +1071,8 @@ def op_list(scope="all"):
     rows = merge_nodes(per)
     st = op_status(scope)[1]
     out = {"ok": True, "nodes": per, "node_order": nodes, "models": rows,
+           "local_node": st.get("local_node", LOCAL_NODE),
+           "suggested_path": st.get("suggested_path", ""),
            "archive_path": st.get("archive_path", ""),
            "configured": st.get("configured", False),
            "cache_free_bytes": st.get("cache_free_bytes", 0)}
@@ -1168,8 +1204,22 @@ def print_human(code, res):
             line += f"  cache free {human(info.get('cache_free_bytes'))}"
             print(line)
         return code
+    if res.get("nodes") and "failed_nodes" in res:
+        print(f"error: {res.get('error')}", file=sys.stderr)
+        for n, info in res["nodes"].items():
+            print(f"  {n:<7} {(info.get('error') if not info.get('ok') else 'ok')}",
+                  file=sys.stderr)
+        return code
+    if res.get("nodes") and res.get("path"):
+        print(f"archive path set to {res['path']}:")
+        for n, info in res["nodes"].items():
+            free = human(info.get("free_bytes")) if info.get("free_bytes") else "?"
+            print(f"  {n:<7} {free} free")
+        return code
     if "path" in res:
         print(f"archive path set: {res['path']} ({human(res['free_bytes'])} free)")
+        if res.get("suggested_path"):
+            print(f"  (detected mount: {res['suggested_path']})")
         return code
     print(json.dumps(res, indent=2))
     return code
@@ -1187,8 +1237,9 @@ def build_parser():
     p.add_argument("--unarchive", metavar="MODEL_ID", help="restore a model on every node")
     p.add_argument("--prune-archive", action="store_true",
                    help="with --unarchive: delete the archive copy after a verified restore")
-    p.add_argument("--node", default="all", choices=["all", "head", "worker"],
-                   help="limit the operation to one node (default: all)")
+    p.add_argument("--node", default=None, choices=["all", "head", "worker"],
+                   help="limit the operation to one node (default: all for "
+                        "list/status/archive/unarchive, this node for --set-path)")
     p.add_argument("--local", action="store_true",
                    help="act on this node only (internal: used across nodes)")
     p.add_argument("--stage", default="commit",
@@ -1204,10 +1255,13 @@ def dispatch(argv):
     a = build_parser().parse_args(list(argv))
     if a.self_node:
         set_local_node(a.self_node)
-    scope = LOCAL_NODE if a.local else a.node
+    scope = LOCAL_NODE if a.local else (a.node or "all")
     try:
         if a.set_path:
-            code, res = op_set_path(a.set_path)
+            if a.local or a.node is None:
+                code, res = op_set_path(a.set_path)
+            else:
+                code, res = op_set_path_cluster(a.set_path, a.node)
         elif a.archive:
             if a.local:
                 code, res = archive_local(a.archive, stage=a.stage, dry_run=a.dry_run)
