@@ -1182,7 +1182,10 @@ def print_human(code, res):
             if not info.get("ok"):
                 print(f"\n{n}: {info.get('error', 'unavailable')}")
                 continue
-            print(f"\n{n}: archive {info.get('archive_path') or '(not configured)'}"
+            ap = info.get("archive_path") or "(not configured)"
+            if not info.get("archive_path") and info.get("suggested_path"):
+                ap += f" - {info['suggested_path']} is mounted here; --set-path enables it"
+            print(f"\n{n}: archive {ap}"
                   + (f"  free {human(info.get('archive_free_bytes'))}" if info.get("mounted") else "")
                   + f"  |  cache free {human(info.get('cache_free_bytes'))}")
         return code
@@ -1198,7 +1201,10 @@ def print_human(code, res):
             if not isinstance(info, dict) or not info.get("ok"):
                 print(f"  {n:<7} {info.get('error', 'unavailable')}")
                 continue
-            line = f"  {n:<7} {info.get('archive_path') or '(not configured)'}"
+            ap = info.get("archive_path") or "(not configured)"
+            if not info.get("archive_path") and info.get("suggested_path"):
+                ap += f"  ({info['suggested_path']} mounted here; --set-path enables it)"
+            line = f"  {n:<7} {ap}"
             if info.get("mounted"):
                 line += f"  free {human(info.get('archive_free_bytes'))}"
             line += f"  cache free {human(info.get('cache_free_bytes'))}"

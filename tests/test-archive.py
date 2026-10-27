@@ -124,6 +124,12 @@ def main():
     check("detected mount is suggested", res.get("suggested_path") == "/dev/shm",
           res.get("suggested_path"))
     check("detected mount does not configure", res.get("configured") is False, res)
+    r = subprocess.run([sys.executable, HELPER, "--status"],
+                       capture_output=True, text=True,
+                       env=env_for(WORK_HOME, cluster=False,
+                                   extra={"SPARK_VLLM_DEFAULT_ARCHIVE": "/dev/shm"}))
+    check("status says the mount is available but off",
+          "/dev/shm mounted here" in r.stdout, r.stdout.strip())
 
     # --- per-node configuration
     rc, res = jrun("--set-path", WORK_ARCH, "--node", "worker")
