@@ -262,10 +262,13 @@ def models(path=None):
         row["archived"] = True
         row["archive_bytes"] = m.get("nodes", {}).get("head", {}).get("payload_bytes", 0)
         row["archived_at"] = m.get("created_at", "")
+    boot, live = boot_model(), served_model()
     for row in out.values():
         row["state"] = ("cached+archived" if row["cached"] and row["archived"]
                         else "cached" if row["cached"] else "archived")
-        row["current"] = row["id"] == boot_model()
+        row["current"] = row["id"] == boot       # boot default (model.conf)
+        row["serving"] = bool(live) and row["id"] == live
+        row["active"] = row["current"] or row["serving"]
     return [out[k] for k in sorted(out)]
 
 
@@ -440,8 +443,9 @@ def human(n):
 def served_model():
     """Model id the live engine answers with, '' when it is not serving."""
     import urllib.request
+    url = os.environ.get("SPARK_VLLM_ENGINE_URL", "http://127.0.0.1:8000").rstrip("/")
     try:
-        with urllib.request.urlopen("http://127.0.0.1:8000/v1/models", timeout=3) as r:
+        with urllib.request.urlopen(url + "/v1/models", timeout=2) as r:
             return json.load(r)["data"][0]["id"]
     except Exception:
         return ""
@@ -482,22 +486,27 @@ def op_set_path(path):
 
 def op_archive(mid, dry_run=False):
     conf = archive_conf()
-    if not conf["path"]:
-        return 2, {"ok": False, "error": "archive path not configured (run --set-path /archive)"}
-    if not os.path.isdir(conf["path"]):
-        return 2, {"ok": False, "error": f"archive path {conf['path']} is not mounted"}
     rd = repo_dir(mid)
     if not os.path.isdir(rd):
         if os.path.exists(os.path.join(model_archive_dir(mid), "manifest.json")):
             return 2, {"ok": False, "error": f"{mid} is already archived"}
         return 2, {"ok": False, "error": f"{mid} is not in the cache ({rd})"}
+    # the active model cannot be archived: its weights must stay in the cache
+    # (boot default would break the next start; a served model is in use now)
     if mid == boot_model():
-        return 2, {"ok": False,
-                   "error": f"{mid} is the boot default (model.conf) - select another model first"}
+        return 2, {"ok": False, "model_id": mid, "reason": "boot default",
+                   "error": (f"cannot archive the current model ({mid}): it is the boot "
+                             f"default in model.conf - switch to another model/engine first")}
     live = served_model()
-    if live and live == mid and service_active() == "active":
-        return 2, {"ok": False,
-                   "error": f"{mid} is being served right now - stop or switch the service first"}
+    if live and live == mid:
+        return 2, {"ok": False, "model_id": mid, "reason": "serving",
+                   "service": service_active(),
+                   "error": (f"cannot archive the current model ({mid}): the engine is "
+                             f"serving it right now - switch to another model/engine first")}
+    if not conf["path"]:
+        return 2, {"ok": False, "error": "archive path not configured (run --set-path /archive)"}
+    if not os.path.isdir(conf["path"]):
+        return 2, {"ok": False, "error": f"archive path {conf['path']} is not mounted"}
     pay = payload(mid)
     if not pay["entries"]:
         return 2, {"ok": False, "error": f"nothing to archive under {rd}"}

@@ -113,8 +113,11 @@ and the header shows the operation while it runs.
 
 ### Rules the tool enforces
 
-- **Cannot archive the current boot model** (`model.conf`) — switch first.
-- **Cannot archive a model the engine is serving right now** — stop or switch.
+- **The active model cannot be archived.** That is both the boot default in
+  `model.conf` and whatever the engine is serving right now: the archive op
+  refuses with "cannot archive the current model … switch to another
+  model/engine first". Switch (`s` / Enter) and let the engine come up on the
+  new model, then archive the old one.
 - **Unarchive is blocked when it would not fit**; the error lists the cached
   models to archive instead (largest wins first) and the exact shortfall.
 - Locked models are not archived from the TUI (unlock with `l`).

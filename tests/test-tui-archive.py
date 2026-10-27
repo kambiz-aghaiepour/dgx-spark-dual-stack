@@ -144,7 +144,9 @@ def main():
     s2.loop = stub_loop(mod)
     s2.body.set_focus([i for i, m in enumerate(s2.models) if m["id"] == "org/keep"][0])
     s2.start_archive()
-    check("archive refused for current model", "REFUSED" in s2.msg, s2.msg)
+    check("archive refused for current model",
+          "cannot archive the current model" in s2.msg
+          and "switch to another model/engine first" in s2.msg.lower(), s2.msg)
     s2.arch["configured"] = False
     s2.body.set_focus([i for i, m in enumerate(s2.models) if m["id"] == "org/moving"][0])
     s2.start_archive()

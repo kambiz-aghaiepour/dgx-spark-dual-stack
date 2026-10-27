@@ -217,8 +217,10 @@ def run_list():
     print(f"{'MODEL':58} {'ENGINE':6} {'STATE':16} {'CACHED':>9} {'ARCHIVE':>9}  status")
     for m in res["models"]:
         flags = []
-        if m["id"] == cur:
+        if m.get("current") or m["id"] == cur:
             flags.append("current")
+        if m.get("serving"):
+            flags.append("live")
         if m["id"] in locks():
             flags.append("LOCKED")
         if not m.get("cached"):
@@ -324,7 +326,8 @@ class Selector:
                 state, size = "cached", human(m.get("cache_bytes"))
                 hint = ""
             text = (f"{curm}{mark} {m['id']:<46} {m['engine']:<5} {state:<8} {size:>9}"
-                    f"{'  CURR' if m['id'] == cur else ''}{locked}{hint}")
+                    f"{'  CURR' if m['id'] == cur else ''}"
+                    f"{'  LIVE' if m.get('serving') else ''}{locked}{hint}")
             attr = "arch" if archived else ("cur" if m["id"] == self.pending else "body")
             rows.append(urwid.AttrMap(PickRow(text, self, m["id"]), attr,
                                       "archsel" if archived else "sel"))
@@ -405,16 +408,19 @@ class Selector:
         if not row:
             return True
         mid = row["id"]
-        if not self.arch.get("configured"):
-            self.msg = "archive path not configured - press p to set it first"
-            self.refresh()
-            return True
         if not row.get("cached"):
             self.msg = f"{mid} is already archived"
             self.refresh()
             return True
-        if row.get("current"):
-            self.msg = "REFUSED: that is the current boot model - switch first"
+        if row.get("active", row.get("current")):
+            why = ("the engine is serving it right now" if row.get("serving")
+                   else "it is the boot default in model.conf")
+            self.msg = (f"REFUSED: cannot archive the current model ({mid}) - "
+                        f"{why}. Switch to another model/engine first (s).")
+            self.refresh()
+            return True
+        if not self.arch.get("configured"):
+            self.msg = "archive path not configured - press p to set it first"
             self.refresh()
             return True
         if mid in locks():
@@ -689,9 +695,10 @@ class Selector:
         if key in ("d", "D"):
             if self.models:
                 mid = self.models[self.body.focus_position]["id"]
-                cur = self.conf.get("MODEL_ID", "")
-                if mid == cur:
-                    self.msg = f"REFUSED: {mid} is the currently used model"
+                row0 = self.row_for(mid)
+                if row0.get("active", mid == self.conf.get("MODEL_ID", "")):
+                    self.msg = (f"REFUSED: {mid} is the current model - "
+                                f"switch to another one first")
                 elif not self.row_for(mid).get("cached"):
                     self.msg = (f"REFUSED: {mid} is archived - keep it, or delete the "
                                 f"archive dir under the archive path")

@@ -6,6 +6,7 @@ The archive location defaults to /dev/shm (needs a different filesystem than
 $HOME); override with ARCHIVE_TEST_PATH=/some/other/fs/dir.
 """
 import hashlib
+import http.server
 import json
 import os
 import shutil
@@ -126,6 +127,11 @@ def main():
     check("status not configured", rc == 0 and res["configured"] is False, res)
     rc, res = jrun("--archive", "org/alpha", expect=2)
     check("archive refused without path", rc == 2 and "not configured" in res.get("error", ""), res)
+    # the current-model rule wins over the missing-config rule: configuring a
+    # path would not make archiving the active model legal
+    rc, res = jrun("--archive", "org/delta", expect=2)
+    check("current model refused even with no archive path",
+          rc == 2 and "cannot archive the current model" in res.get("error", ""), res)
 
     # path validation
     rc, res = jrun("--set-path", os.path.join(BASE, "arch-samefs"), expect=2)
@@ -141,9 +147,48 @@ def main():
     check("engine mapping miaai/b12x",
           all(m["engine"] == "b12x" for m in ids.values()))
     check("current flag on delta", ids["org/delta"]["current"] is True)
+    check("active flag only on delta",
+          ids["org/delta"]["active"] is True
+          and not any(m["active"] for k, m in ids.items() if k != "org/delta"))
 
     rc, res = jrun("--archive", "org/delta", expect=2)
-    check("refused: boot default", rc == 2 and "boot default" in res.get("error", ""), res)
+    err = res.get("error", "")
+    check("refused: current model is the boot default",
+          rc == 2 and "cannot archive the current model" in err
+          and "switch to another model/engine first" in err and res.get("reason") == "boot default",
+          res)
+
+    # while the engine serves a model, archiving that model is refused but any
+    # other model may still be archived
+    class _Eng(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = json.dumps({"data": [{"id": "org/alpha"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), _Eng)
+    import threading
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    os.environ["SPARK_VLLM_ENGINE_URL"] = f"http://127.0.0.1:{srv.server_address[1]}"
+    rc, res = jrun("--list")
+    live = {m["id"]: m for m in res.get("models", [])}
+    check("serving flag from the engine", live.get("org/alpha", {}).get("serving") is True
+          and live.get("org/alpha", {}).get("active") is True, live.get("org/alpha"))
+    rc, res = jrun("--archive", "org/alpha", expect=2)
+    err = res.get("error", "")
+    check("refused: current model is being served",
+          rc == 2 and "cannot archive the current model" in err
+          and "serving it right now" in err and res.get("reason") == "serving", res)
+    rc, res = jrun("--archive", "org/beta", "--dry-run")
+    check("other models stay archivable while one is served", rc == 0, res)
+    srv.shutdown()
+    os.environ.pop("SPARK_VLLM_ENGINE_URL", None)
 
     # --- archive alpha (repo-internal payload)
     alpha_tree = tree_state(os.path.join(HUB, "models--org--alpha"))

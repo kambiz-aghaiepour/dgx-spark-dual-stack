@@ -108,9 +108,11 @@ vllm-model-select                          # x: archive, u: unarchive, p: path
 ```
 
 Unarchiving is pre-checked against free space on the internal filesystem and
-refuses with a list of models to archive first when it would not fit. Setup
-(mkfs/fstab/ownership), the on-disk layout and the exact move/verify/delete
-sequence are in [docs/archive.md](docs/archive.md).
+refuses with a list of models to archive first when it would not fit. The model
+that is active — the `model.conf` boot default or whatever the engine is serving
+— cannot be archived at all: the tool refuses and tells you to switch to another
+model/engine first. Setup (mkfs/fstab/ownership), the on-disk layout and the
+exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
 ## Fresh install (from scratch)
 
