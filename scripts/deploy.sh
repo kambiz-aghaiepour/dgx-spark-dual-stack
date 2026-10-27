@@ -8,7 +8,7 @@
 #   ./deploy.sh --force-config  # replace the live model.conf with the template
 #   ./deploy.sh --skip-mods     # don't install launcher mods into the docker fork
 #
-# Flags combine: `./deploy.sh --all --skip-mods`.
+# Flags combine: ./deploy.sh --all --skip-mods.
 #
 # Runtime state is never clobbered silently: an existing
 # ~/.config/spark-vllm/model.conf is kept unless --force-config is given, and
@@ -29,7 +29,7 @@ for arg in "$@"; do
     --all)          ALL=1 ;;
     --force-config) FORCE_CONFIG=1 ;;
     --skip-mods)    SKIP_MODS=1 ;;
-    -h|--help)      sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)      sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)              echo "deploy.sh: unknown argument: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
