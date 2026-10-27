@@ -118,6 +118,12 @@ def node_names(scope="all"):
     return [scope]
 
 
+def set_local_node(name):
+    """Tell this process which node it is (used for the ssh side)."""
+    global LOCAL_NODE
+    LOCAL_NODE = name
+
+
 def node_host(node):
     return "" if node == LOCAL_NODE else WORKER_HOST
 
@@ -149,6 +155,8 @@ def call_node(node, args, timeout=7200):
         return code, res
     import shlex
     argv = list(args) + ([] if "--json" in args else ["--json"])
+    if "--self-node" not in argv:
+        argv += ["--self-node", node]
     cmd = REMOTE_CMD.format(host=node_host(node), helper=HELPER,
                             args=" ".join(shlex.quote(a) for a in argv))
     try:
@@ -1186,6 +1194,7 @@ def build_parser():
     p.add_argument("--stage", default="commit",
                    choices=["plan", "copy", "commit", "rollback"], help=argparse.SUPPRESS)
     p.add_argument("--dry-run", action="store_true", help="report what would happen")
+    p.add_argument("--self-node", metavar="NAME", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="machine-readable output")
     return p
 
@@ -1193,6 +1202,8 @@ def build_parser():
 def dispatch(argv):
     """Parse argv and run one operation. Returns (exit-code, result-dict)."""
     a = build_parser().parse_args(list(argv))
+    if a.self_node:
+        set_local_node(a.self_node)
     scope = LOCAL_NODE if a.local else a.node
     try:
         if a.set_path:
