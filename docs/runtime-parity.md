@@ -142,13 +142,17 @@ runtime helpers copied by `deploy.sh --all`.
 
 `vllm-model-archive.py` plus the `x` / `u` / `p` keys in the selector let a
 checkpoint move to an external ext4 disk and back, so several models can be kept
-without several hundred GB of internal disk. Procedure and layout:
-[docs/archive.md](archive.md).
+without several hundred GB of internal disk. The operation spans **both nodes**
+(the pair is tensor-parallel, so a model must be cached on each), and every size
+is reported per node. Procedure and layout: [docs/archive.md](archive.md).
 
 Parity notes:
 
-- `deploy.sh` installs the helper (and `--all` copies it to the worker, which has
-  its own disk and its own `ARCHIVE_PATH`).
+- `deploy.sh` installs the helper as an executable (the head runs it over ssh);
+  `--all` copies it to the worker, which has its own disk and its own
+  `ARCHIVE_PATH`.
+- `verify-deployment.sh` prints the archive state per node, so a worker without
+  the helper or without a configured/mounted path shows up as such.
 - The helper is reported as `WARN`, not `FAIL`, when missing: a head that has not
   been re-deployed keeps working, with archive/unarchive disabled.
 - Archiving never touches the parity-checked configuration: flags profiles,

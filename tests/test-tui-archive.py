@@ -68,7 +68,9 @@ def fixture():
     os.chmod(stub, 0o755)
     write(os.path.join(HOME, ".config/spark-vllm/model.conf"),
           "MODEL_ID=org/keep\nSERVED_MODEL_NAME=org/keep\n")
-    env = dict(os.environ, HOME=HOME)
+    # single-node mode: the TUI test drives one node; the cluster wiring is
+    # covered by tests/test-archive.py
+    env = dict(os.environ, HOME=HOME, SPARK_VLLM_NODES="head")
     for args in (["--set-path", ARCH], ["--archive", "org/gone"]):
         r = subprocess.run([sys.executable, HELPER, *args], capture_output=True, text=True, env=env)
         if r.returncode != 0:
@@ -77,6 +79,8 @@ def fixture():
 
 def load_tui():
     os.environ["HOME"] = HOME
+    os.environ["SPARK_VLLM_NODES"] = "head"
+    os.environ["SPARK_VLLM_ENGINE_URL"] = "http://127.0.0.1:9"
     spec = importlib.util.spec_from_file_location("vllm_model_select", TUI)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -116,7 +120,8 @@ def main():
           all(a.attr_map.get(None) in ("body", "cur") for a in rows
               if "org/keep" in a.original_widget.text or "org/moving" in a.original_widget.text),
           [a.attr_map.get(None) for a in rows])
-    check("header mentions archive path", ARCH in s.header_text(), s.header_text())
+    check("header shows per-node space", "head:" in s.header_text()
+          and "archive" in s.header_text(), s.header_text())
     check("header counts archived", "1 archived" in s.header_text(), s.header_text())
     s.refresh()
     check("footer has archive keys", "x:archive" in s.footer.text and "u:unarchive" in s.footer.text
@@ -170,19 +175,23 @@ def main():
     check("unarchive allowed when it fits", s3.confirming_arch is True and s3.arch_action == "unarchive",
           (s3.confirming_arch, s3.arch_action, s3.msg))
 
-    # forced no-space path
+    # forced no-space path: a huge safety margin makes the helper's per-node
+    # fit check fail, which must block the confirm dialog
+    conf = os.path.join(HOME, ".config/spark-vllm/archive.conf")
+    keep = open(conf).read()
+    with open(conf, "w") as f:
+        f.write(f"ARCHIVE_PATH={ARCH}\nMIN_FREE_GB=100000000\n")
     s4 = mod.Selector()
     s4.frame = s.frame
     s4.loop = stub_loop(mod)
-    row = s4.row_for("org/gone")
-    row.update({"fits": False, "needed_bytes": 500_000_000_000, "fits_have_bytes": 100_000_000_000,
-                "shortfall_bytes": 410_000_000_000,
-                "suggestions": [{"id": "org/moving", "frees_bytes": 5_000_000}]})
     s4.body.set_focus([i for i, m in enumerate(s4.models) if m["id"] == "org/gone"][0])
     s4.start_unarchive()
-    check("no-space message names a model to archive",
-          "does not fit" in s4.msg and "org/moving" in s4.msg, s4.msg)
-    check("no-space overlay shown", s4.confirming_arch is False and s4.loop.widget is not None)
+    check("no-space blocks the unarchive", s4.confirming_arch is False and s4.loop.widget is not None,
+          (s4.confirming_arch, s4.msg))
+    check("no-space dialog names the short node and a model to archive",
+          "does not fit" in s4.msg, s4.msg)
+    with open(conf, "w") as f:
+        f.write(keep)
 
     print()
     if fails:

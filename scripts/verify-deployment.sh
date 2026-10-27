@@ -128,19 +128,39 @@ echo "-- archive tool"
 if [ -e "$BIN/vllm-model-archive.py" ]; then
   check_file "$HERE/scripts/vllm-model-archive.py" "$BIN/vllm-model-archive.py"
   if arc_json="$(python3 "$BIN/vllm-model-archive.py" --status --json 2>&1)"; then
-    arc_line="$(printf '%s' "$arc_json" | python3 -c '
+
+    arc_lines="$(printf '%s' "$arc_json" | python3 -c '
 import json, sys
+
+
+def human(n):
+    n = float(n or 0)
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or u == "TB":
+            return ("%.1f %s" % (n, u)) if u != "B" else "%d B" % int(n)
+        n /= 1000.0
+    return "%.1f TB" % n
+
+
 try:
     d = json.load(sys.stdin)
 except Exception:
-    print("unparsable status")
+    print("  (unparsable status)")
     raise SystemExit
-path = d.get("archive_path") or "(not configured)"
-state = "mounted" if d.get("mounted") else "NOT mounted"
-n = len(d.get("archived") or [])
-print("%s | %s | %d archived" % (path, state, n))
+for n, i in (d.get("nodes") or {}).items():
+    if not i.get("ok", True):
+        print("  %-7s %s" % (n, i.get("error", "unavailable")))
+        continue
+    if not i.get("configured"):
+        print("  %-7s not configured" % n)
+        continue
+    state = "mounted" if i.get("mounted") else "NOT mounted"
+    print("  %-7s %s | %s | %d archived | cache free %s"
+          % (n, i.get("archive_path"), state, len(i.get("archived") or []),
+             human(i.get("cache_free_bytes"))))
 ' 2>/dev/null)"
-    ok "archive: ${arc_line:-?}"
+    ok "archive status:"
+    printf '%s\n' "${arc_lines:-  ?}" | while IFS= read -r l; do printf '    %s\n' "$l"; done
   else
     bad "vllm-model-archive --status failed"
   fi

@@ -61,8 +61,8 @@ tools/              extra tooling (benchmark harness, sweep)
 | `spark-vllm-podman-start-select` | systemd ExecStart. Reads `model.conf`, dispatches per model: flash-next → `miaai_launch.sh`; anything else → b12x `launch-cluster.sh` (unchanged path). Also forwards per-model `<flags>.env` vars into the container (`-e`). |
 | `miaai_launch.sh` | Native flash-next stack: renders the MiaAI runbook `.env` from `model.conf` + per-model env + fabric constants, runs `start.sh --launch`, keeps the unit alive after readiness. |
 | `vllm-model-set` | `vllm-model-set <hf-id> [alias] [--apply]` — the one switch surface. Writes `model.conf`, pauses watchdog, stops unit, **removes both container names (`vllm_node`, `vllm-fn`) on both nodes**, evicts the checkpoint page cache (OOM race), starts, waits for the readiness gate + smoke, restores watchdog. |
-| `vllm-model-select.py` / `vllm-model-add.py` | model list / add + lock / delete / `--status` (orchestration state + live engine probe). The selector TUI also does archive/unarchive (`x` / `u`) and archive-path setup (`p`). |
-| `vllm-model-archive.py` | checkpoint archive engine behind those keys: `--set-path`, `--status`, `--list`, `--archive`, `--unarchive` (+`--dry-run`, `--json`). Copies a model's cache tree to the archive disk, verifies it file-by-file, frees the internal copy, and refuses an unarchive that would not fit. |
+| `vllm-model-select.py` / `vllm-model-add.py` | model list / add + lock / delete / `--status` (orchestration state + live engine probe). The selector TUI also does archive/unarchive (`x` / `u`) and archive-path setup (`p`), with a size column per node. |
+| `vllm-model-archive.py` | checkpoint archive engine behind those keys: `--set-path`, `--status`, `--list`, `--archive`, `--unarchive` (+`--dry-run`, `--json`, `--node`). Runs on **all nodes** (worker over ssh): plan, copy+verify everywhere, then delete everywhere; reports bytes copied and freed per node. |
 | `vllm-model-select` | Launcher for the selector above: execs `vllm-model-select.py` with the `urwid` venv interpreter (`~/.local/share/vllm-tui/venv`). Must stay a **wrapper** — a symlink to the `.py` resolves to system python and dies on `import urwid`. |
 | `setup-tui-venv.sh` | Creates that venv (`urwid==4.2.5`). Called by `deploy.sh`; falls back to `uv` on images without `ensurepip`. |
 | `switch.sh` | `switch.sh {status\|list\|to <model-id> [--apply]}` — one obvious command for the daily switch, thin wrapper over the two above. |
@@ -98,12 +98,14 @@ gate + smoke → watchdog restore. Typical Apply time: 7–13 min.
 
 The internal NVMe holds only a couple of checkpoints, so models can be
 **archived** to an external ext4 disk instead of deleted: the cached data moves
-to `<archive>/models/<name>/`, the profile (flags, alias, lock) stays, and the
-model stays listed in the selector — greyed out and not selectable until it is
-unarchived. Space is freed as soon as the copy is verified.
+to `<archive>/models/<name>/` **on every node** (a checkpoint must be in both
+caches to serve), the profile (flags, alias, lock) stays, and the model stays
+listed in the selector — greyed out and not selectable until it is unarchived.
+Space is freed as soon as each node's copy is verified, and reported per node
+(the head's blobs are partly shared, the worker's copies are not).
 
 ```bash
-vllm-model-archive --set-path /archive    # once per node (or press p in the TUI)
+vllm-model-archive --set-path /archive    # on each node (press p in the TUI, or ssh)
 vllm-model-select                          # x: archive, u: unarchive, p: path
 ```
 

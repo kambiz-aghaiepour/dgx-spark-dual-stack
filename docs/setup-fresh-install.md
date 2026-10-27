@@ -69,8 +69,14 @@ sudo mkfs.ext4 -m 0 -L archive /dev/sda          # after wipefs; USB SSD
 sudo mkdir -p /archive && sudo mount /dev/sda /archive
 echo "UUID=$(sudo blkid -s UUID -o value /dev/sda)  /archive  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2" | sudo tee -a /etc/fstab
 sudo chown kambiz:kambiz /archive
-vllm-model-archive --set-path /archive           # per node, after deploy.sh
+vllm-model-archive --set-path /archive           # on this node
+ssh gx10-02 vllm-model-archive --set-path /archive   # and on the worker
 ```
+
+Archive/unarchive act on **both** nodes (a checkpoint must be in both caches to
+serve), so each node needs the helper and its own path. `deploy.sh --all` installs
+the helper on the worker; `--set-path` is per node because each Spark has its own
+disk.
 
 `nofail` keeps the cluster booting when the disk is unplugged; archive
 operations then refuse instead of writing into an empty mountpoint. ext4 is

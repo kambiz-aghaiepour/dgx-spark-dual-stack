@@ -42,6 +42,10 @@ def human(n):
     return f"{n:.1f} TB"
 
 
+def node_order(res):
+    return (res.get("node_order") or list((res.get("nodes") or {}).keys()) or ["head"])
+
+
 def archive_call(*args, timeout=30):
     """Run vllm-model-archive with --json and return its parsed result."""
     if not os.path.exists(ARCHIVER):
@@ -107,10 +111,13 @@ def archive_list():
     for m in scan_models():
         cur = m["id"] == boot
         srv = bool(live) and m["id"] == live
+        nbytes = cache_model_bytes(m["id"])
         rows.append({"id": m["id"],
                      "engine": "miaai" if "Qwen3.8-Flash-Next-NVFP4" in m["id"] else "b12x",
                      "state": "cached", "cached": True, "archived": False,
-                     "cache_bytes": cache_model_bytes(m["id"]), "archive_bytes": 0,
+                     "cache_bytes": nbytes, "archive_bytes": 0,
+                     "nodes": {"head": {"cached": True, "archived": False, "state": "cached",
+                                        "bytes": nbytes, "archive_bytes": 0}},
                      "current": cur, "serving": srv, "active": cur or srv})
     try:
         free = shutil.disk_usage(HUB).free
@@ -228,8 +235,12 @@ def run_list():
     res = archive_list()
     conf = read_conf()
     cur = conf.get("MODEL_ID", "")
-    print(f"{'MODEL':58} {'ENGINE':6} {'STATE':16} {'CACHED':>9} {'ARCHIVE':>9}  status")
+    order = node_order(res)
+    print(f"{'MODEL':44} {'ENGINE':5} {'STATE':9} "
+          + " ".join(f"{n.upper():>9}" for n in order) + "  status")
     for m in res["models"]:
+        per = m.get("nodes") or {}
+        sizes = " ".join(f"{human((per.get(n) or {}).get('bytes') or 0):>9}" for n in order)
         flags = []
         if m.get("current") or m["id"] == cur:
             flags.append("current")
@@ -237,15 +248,22 @@ def run_list():
             flags.append("live")
         if m["id"] in locks():
             flags.append("LOCKED")
+        if m.get("state") == "partial":
+            flags.append("HALF-ARCHIVED")
         if not m.get("cached"):
             flags.append("archived - unarchive to use")
-        print(f"{m['id']:<58} {m['engine']:<6} {m['state']:<16} "
-              f"{human(m.get('cache_bytes')):>9} {human(m.get('archive_bytes')):>9}  {' '.join(flags)}")
+        print(f"{m['id']:<44} {m['engine']:<5} {m['state']:<9} {sizes}  {' '.join(flags)}")
     print(f"\ncurrent: {cur} -> {conf.get('SERVED_MODEL_NAME', '')}")
-    arch = res.get("archive_path") or "(not configured - run --set-archive-path)"
-    free = res.get("archive_free_bytes")
-    print(f"archive: {arch}" + (f"  free {human(free)}" if free else ""))
-    print(f"cache:   free {human(res.get('cache_free_bytes'))}")
+    for n in order:
+        info = (res.get("nodes") or {}).get(n) or {}
+        if info and not info.get("ok", True):
+            print(f"{n + ':':<8} {info.get('error', 'unavailable')}")
+            continue
+        line = f"{n + ':':<8} archive {info.get('archive_path') or '(not configured)'}"
+        if info.get("mounted"):
+            line += f"  free {human(info.get('archive_free_bytes'))}"
+        line += f"  | cache free {human(info.get('cache_free_bytes'))}"
+        print(line)
     if res.get("note"):
         print(f"note:    {res['note']}")
 
@@ -328,20 +346,18 @@ class Selector:
 
     def build_rows(self):
         cur, rows = self.conf.get("MODEL_ID", ""), []
+        order = node_order(self.arch)
         for m in self.models:
             mark = ">" if m["id"] == self.pending else " "
             curm = "*" if m["id"] == cur else " "
             locked = " [LOCKED]" if m["id"] in locks() else ""
             archived = not m.get("cached")
-            if archived:
-                state, size = "ARCHIVED", human(m.get("archive_bytes"))
-                hint = ("  fits" if m.get("fits") else "  NO-SPACE") if m.get("archived") else ""
-            else:
-                state, size = "cached", human(m.get("cache_bytes"))
-                hint = ""
-            text = (f"{curm}{mark} {m['id']:<46} {m['engine']:<5} {state:<8} {size:>9}"
+            per = m.get("nodes") or {}
+            sizes = " ".join(f"{human((per.get(n) or {}).get('bytes') or 0):>9}" for n in order)
+            state = "ARCHIVED" if archived else ("PARTIAL" if m.get("state") == "partial" else "cached")
+            text = (f"{curm}{mark} {m['id']:<40} {m['engine']:<5} {state:<8} {sizes}"
                     f"{'  CURR' if m['id'] == cur else ''}"
-                    f"{'  LIVE' if m.get('serving') else ''}{locked}{hint}")
+                    f"{'  LIVE' if m.get('serving') else ''}{locked}")
             attr = "arch" if archived else ("cur" if m["id"] == self.pending else "body")
             rows.append(urwid.AttrMap(PickRow(text, self, m["id"]), attr,
                                       "archsel" if archived else "sel"))
@@ -388,12 +404,23 @@ class Selector:
     def header_text(self):
         n_cache = sum(1 for m in self.models if m.get("cached"))
         n_arch = sum(1 for m in self.models if m.get("archived"))
-        apath = self.arch.get("archive_path") or "(archive path not set - p to configure)"
-        afree = self.arch.get("archive_free_bytes")
+        order = node_order(self.arch)
+        nodes = self.arch.get("nodes") or {}
+        parts = []
+        for n in order:
+            info = nodes.get(n) or {}
+            if info and not info.get("ok", True):
+                parts.append(f"{n}: unavailable")
+                continue
+            seg = f"{n}: cache {human(info.get('cache_free_bytes'))}"
+            seg += (f", archive {human(info.get('archive_free_bytes'))}"
+                    if info.get("mounted") else ", archive n/a")
+            parts.append(seg)
+        if not self.arch.get("configured"):
+            parts.append("p to set the archive path")
         lines = [f" vllm-model-select | current: {self.conf.get('MODEL_ID', '')} as "
                  f"{self.conf.get('SERVED_MODEL_NAME', '')} | {n_cache} cached, {n_arch} archived",
-                 f" archive: {apath}" + (f" ({human(afree)} free)" if afree else "")
-                 + f" | cache free {human(self.arch.get('cache_free_bytes'))}"]
+                 " " + " | ".join(parts)]
         if self.bg:
             lines.append(f" \u23f3 {self.bg_label} running - footer shows the result")
         st = self.switch_status()
@@ -441,19 +468,28 @@ class Selector:
             self.msg = "REFUSED: model is locked (toggle with l)"
             self.refresh()
             return True
+        plan = archive_call("--archive", mid, "--dry-run", timeout=180)
+        if not plan.get("ok"):
+            self.msg = f"cannot archive {mid}: {plan.get('error')}"
+            self.refresh()
+            return True
+        lines = [f"ARCHIVE {mid}?  ({plan.get('engine', row.get('engine'))})", ""]
+        for n, p in (plan.get("nodes") or {}).items():
+            lines.append(f"  {n:<7} {human(p.get('bytes')):>9} -> {p.get('archive_path')}"
+                         f"   frees ~{human(p.get('freed_est_bytes'))}")
+        lines += [f"  {'total':<7} {human(plan.get('total_bytes')):>9} across "
+                  f"{len(plan.get('nodes') or {})} nodes",
+                  "",
+                  "Each node's copy is verified before any internal copy is removed;",
+                  "profiles (flags) stay and the row stays, greyed out.",
+                  "Takes minutes per node for a full checkpoint. [y/N]"]
         self.arch_target, self.arch_action = mid, "archive"
         self.confirming_arch = True
         self.loop.screen.set_mouse_tracking(False)
         self.loop.widget = urwid.Overlay(
-            urwid.LineBox(urwid.Filler(urwid.Text(
-                f"ARCHIVE {mid}?\n"
-                f"  engine: {row.get('engine')}\n"
-                f"  move:   {human(row.get('cache_bytes'))} -> {self.arch.get('archive_path')}\n"
-                f"  then the internal cache copy is removed.\n"
-                f"  profiles (flags) stay; the row stays, greyed out.\n"
-                f"Takes minutes for a full checkpoint. [y/N]", align="center")),
-                title="confirm archive"),
-            self.frame, "center", ("relative", 72), "middle", 8)
+            urwid.LineBox(urwid.Filler(urwid.Text("\n".join(lines), align="center")),
+                          title="confirm archive"),
+            self.frame, "center", ("relative", 78), "middle", 12)
         return True
 
     def start_unarchive(self):
@@ -473,33 +509,43 @@ class Selector:
             self.msg = f"{mid} is already in the cache"
             self.refresh()
             return True
-        need = human(row.get("needed_bytes"))
-        if row.get("fits") is False:
-            sugg = ", ".join(s["id"] for s in row.get("suggestions") or []) or "another cached model"
-            self.msg = (f"{mid} does not fit: needs {need}, usable free "
-                        f"{human(row.get('fits_have_bytes'))} - archive {sugg} first")
+        plan = archive_call("--unarchive", mid, "--dry-run", timeout=240)
+        nodes = plan.get("nodes") or {}
+        if not plan.get("ok"):
+            lines = [f"NOT ENOUGH INTERNAL SPACE for {mid}", ""]
+            for n, p in nodes.items():
+                if not p.get("ok"):
+                    lines.append(f"  {n:<7} {p.get('error')}")
+                    continue
+                mark = "ok" if p.get("fits") else f"SHORT by {human(p.get('shortfall_bytes'))}"
+                lines.append(f"  {n:<7} needs {human(p.get('needed_bytes')):<9} usable "
+                             f"{human(p.get('fits_have_bytes')):<9} {mark}")
+            sugg = [(n, s["id"], s["frees_bytes"]) for n, p in nodes.items()
+                    for s in (p.get("suggestions") or [])]
+            if sugg:
+                lines += ["", "Archive another model first (x), e.g.:"]
+                lines += [f"  {n:<7} {i}  (frees {human(b)})" for n, i, b in sugg]
+            lines += ["", "[any key]"]
+            self.msg = f"{mid} does not fit on every node - see the dialog"
             self.loop.widget = urwid.Overlay(
-                urwid.LineBox(urwid.Filler(urwid.Text(
-                    f"NOT ENOUGH INTERNAL SPACE for {mid}\n\n"
-                    f"  needs:        {need}\n"
-                    f"  usable free:  {human(row.get('fits_have_bytes'))}\n"
-                    f"  short by:     {human(row.get('shortfall_bytes'))}\n\n"
-                    f"Archive another model first (x), e.g.:\n  {sugg}\n\n"
-                    f"[any key]", align="center")), title="unarchive blocked"),
-                self.frame, "center", ("relative", 72), "middle", 10)
+                urwid.LineBox(urwid.Filler(urwid.Text("\n".join(lines), align="center")),
+                              title="unarchive blocked"),
+                self.frame, "center", ("relative", 78), "middle", 14)
             self.refresh()
             return True
+        lines = [f"UNARCHIVE {mid}?", ""]
+        for n, p in nodes.items():
+            after = max(0, (p.get("fits_have_bytes") or 0) - (p.get("needed_bytes") or 0))
+            lines.append(f"  {n:<7} pull back {human(p.get('needed_bytes')):>9}"
+                         f"   free after ~{human(after)}")
+        lines += ["", "[y/N]"]
         self.arch_target, self.arch_action = mid, "unarchive"
         self.confirming_arch = True
         self.loop.screen.set_mouse_tracking(False)
         self.loop.widget = urwid.Overlay(
-            urwid.LineBox(urwid.Filler(urwid.Text(
-                f"UNARCHIVE {mid}?\n"
-                f"  engine: {row.get('engine')}\n"
-                f"  pull back: {need} into the internal cache\n"
-                f"  free after: ~{human(max(0, (row.get('fits_have_bytes') or 0) - (row.get('needed_bytes') or 0)))}\n"
-                f"[y/N]", align="center")), title="confirm unarchive"),
-            self.frame, "center", ("relative", 72), "middle", 8)
+            urwid.LineBox(urwid.Filler(urwid.Text("\n".join(lines), align="center")),
+                          title="confirm unarchive"),
+            self.frame, "center", ("relative", 78), "middle", 10)
         return True
 
     def run_bg(self, action, mid):
@@ -533,15 +579,16 @@ class Selector:
             res = {}
         self.bg, self.bg_label, self.bg_out = None, "", None
         self.reload()
+        nodes = res.get("nodes") or {}
         if res.get("ok"):
-            if "freed_bytes" in res:
-                self.msg = (f"archived {res.get('model_id')}: {human(res.get('bytes'))} moved, "
-                            f"freed {human(res.get('freed_bytes'))} internal")
-            else:
-                self.msg = (f"unarchived {res.get('model_id')}: "
-                            f"{human(res.get('restored_bytes'))} pulled back")
+            key = "freed_bytes" if "total_freed_bytes" in res else "restored_bytes"
+            verb = "freed" if key == "freed_bytes" else "restored"
+            per = ", ".join(f"{n} {human((p or {}).get(key))}" for n, p in nodes.items())
+            self.msg = f"{label}: {per or 'done'}  ({verb} per node)"
         else:
-            self.msg = f"{label} failed: {res.get('error') or 'see ' + ARCHIVE_LOG}"
+            bad = ", ".join(f"{n}: {(p or {}).get('error')}" for n, p in nodes.items()
+                            if not (p or {}).get("ok")) or res.get("error")
+            self.msg = f"{label} failed: {bad or 'see ' + ARCHIVE_LOG}"
         self.refresh()
 
     def edit_archive_path(self):
@@ -801,13 +848,21 @@ def run_status():
         print(f"switch:       {unit} - engine: {engine}")
     print(f"live engine:  {engine}")
     ast = archive_call("--status")
-    if ast.get("configured"):
-        n = len(ast.get("archived") or [])
-        mount = "mounted" if ast.get("mounted") else "NOT MOUNTED"
-        free = human(ast.get("archive_free_bytes")) if ast.get("archive_free_bytes") else "?"
-        print(f"archive:      {ast['archive_path']} ({mount}, {free} free, {n} archived)")
-    else:
+    nodes = ast.get("nodes") or {}
+    if not nodes:
         print("archive:      not configured (--set-archive-path /archive)")
+    for n, info in nodes.items():
+        if info and not info.get("ok", True):
+            print(f"archive[{n}]: {info.get('error', 'unavailable')}")
+            continue
+        if not info.get("configured"):
+            print(f"archive[{n}]: not configured (--set-archive-path /archive there)")
+            continue
+        mount = "mounted" if info.get("mounted") else "NOT MOUNTED"
+        free = human(info.get("archive_free_bytes")) if info.get("archive_free_bytes") else "?"
+        print(f"archive[{n}]: {info.get('archive_path')} ({mount}, {free} free, "
+              f"{len(info.get('archived') or [])} archived, "
+              f"cache free {human(info.get('cache_free_bytes'))})")
     if interesting:
         print("last engine:  " + interesting[-1].split("]: ")[-1][:110])
 
