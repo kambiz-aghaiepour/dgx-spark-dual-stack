@@ -16,6 +16,7 @@ import glob
 import json
 import os
 import shutil
+import urllib.request
 import subprocess
 import sys
 import time
@@ -85,19 +86,32 @@ def cache_model_bytes(mid):
     return total
 
 
+def live_engine_id():
+    """Model id the local engine is serving, '' when nothing answers."""
+    url = os.environ.get("SPARK_VLLM_ENGINE_URL", "http://127.0.0.1:8000").rstrip("/")
+    try:
+        with urllib.request.urlopen(url + "/v1/models", timeout=2) as r:
+            return json.load(r)["data"][0]["id"]
+    except Exception:
+        return ""
+
+
 def archive_list():
     res = archive_call("--list", timeout=90)
     if res.get("models"):
         return res
     # helper missing: fall back to a plain cache scan so the TUI still works
     conf = archive_call("--status")
+    boot, live = read_conf().get("MODEL_ID", ""), live_engine_id()
     rows = []
     for m in scan_models():
+        cur = m["id"] == boot
+        srv = bool(live) and m["id"] == live
         rows.append({"id": m["id"],
                      "engine": "miaai" if "Qwen3.8-Flash-Next-NVFP4" in m["id"] else "b12x",
                      "state": "cached", "cached": True, "archived": False,
                      "cache_bytes": cache_model_bytes(m["id"]), "archive_bytes": 0,
-                     "current": False})
+                     "current": cur, "serving": srv, "active": cur or srv})
     try:
         free = shutil.disk_usage(HUB).free
     except OSError:
