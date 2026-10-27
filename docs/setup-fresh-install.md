@@ -69,8 +69,8 @@ sudo mkfs.ext4 -m 0 -L archive /dev/sda          # after wipefs; USB SSD
 sudo mkdir -p /archive && sudo mount /dev/sda /archive
 echo "UUID=$(sudo blkid -s UUID -o value /dev/sda)  /archive  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2" | sudo tee -a /etc/fstab
 sudo chown kambiz:kambiz /archive
-vllm-model-archive --set-path /archive           # on this node
-ssh gx10-02 vllm-model-archive --set-path /archive   # and on the worker
+vllm-model-archive --set-path /archive --node all    # both nodes, reported per node
+# in the TUI: p offers a detected /archive and then asks about the worker
 ```
 
 Archive/unarchive act on **both** nodes (a checkpoint must be in both caches to
