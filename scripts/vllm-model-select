@@ -1,0 +1,27 @@
+#!/bin/bash
+# vllm-model-select — launcher for the selector TUI / --status probe.
+#
+# The selector itself is vllm-model-select.py; it imports urwid, which the
+# system interpreter on DGX OS does not provide.  This wrapper runs it with the
+# dedicated venv interpreter created by scripts/setup-tui-venv.sh (deploy.sh
+# calls that before installing this file).
+#
+# NOTE: do not replace this with a symlink to the .py — a `#!/usr/bin/env
+# python3` shebang resolves to system python and fails on `import urwid`.
+set -euo pipefail
+
+PY="${HOME}/.local/share/vllm-tui/venv/bin/python"
+SEL="${HOME}/.local/bin/vllm-model-select.py"
+
+if [ ! -x "$PY" ]; then
+  echo "vllm-model-select: venv interpreter missing: $PY" >&2
+  echo "  run: <repo>/scripts/setup-tui-venv.sh" >&2
+  exit 127
+fi
+if [ ! -f "$SEL" ]; then
+  echo "vllm-model-select: selector missing: $SEL" >&2
+  echo "  run: <repo>/scripts/deploy.sh" >&2
+  exit 127
+fi
+
+exec "$PY" "$SEL" "$@"
