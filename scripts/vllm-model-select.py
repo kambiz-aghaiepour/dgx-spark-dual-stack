@@ -57,17 +57,25 @@ def archive_call(*args, timeout=30):
         return {"ok": False, "error": (r.stderr or r.stdout).strip()[:200]}
 
 
-def tree_bytes(path):
-    """Apparent size of a cache tree, hardlinks once, symlinks not followed."""
+def cache_model_bytes(mid):
+    """Size of one cached model: its repo tree plus the blobs its symlinks
+    resolve to (Xet weights live outside models--<id>/). Hardlinks once."""
+    rd = os.path.join(HUB, "models--" + mid.replace("/", "--"))
     total, seen = 0, set()
-    for root, dirs, names in os.walk(path, followlinks=False):
-        for n in names + dirs:
+    for root, _dirs, names in os.walk(rd, followlinks=False):
+        for n in names:
             p = os.path.join(root, n)
             try:
                 st = os.lstat(p)
             except OSError:
                 continue
-            if os.path.islink(p) or not os.path.isfile(p):
+            if os.path.islink(p):
+                p = os.path.realpath(p)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+            if not os.path.isfile(p):
                 continue
             key = (st.st_dev, st.st_ino)
             if key in seen:
@@ -85,11 +93,10 @@ def archive_list():
     conf = archive_call("--status")
     rows = []
     for m in scan_models():
-        rd = os.path.join(HUB, "models--" + m["id"].replace("/", "--"))
         rows.append({"id": m["id"],
                      "engine": "miaai" if "Qwen3.8-Flash-Next-NVFP4" in m["id"] else "b12x",
                      "state": "cached", "cached": True, "archived": False,
-                     "cache_bytes": tree_bytes(rd), "archive_bytes": 0,
+                     "cache_bytes": cache_model_bytes(m["id"]), "archive_bytes": 0,
                      "current": False})
     try:
         free = shutil.disk_usage(HUB).free

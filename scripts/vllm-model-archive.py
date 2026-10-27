@@ -252,7 +252,9 @@ def models(path=None):
             mid = f"{org}/{mod}"
             out[mid] = {"id": mid, "engine": engine_for(mid), "cached": True,
                         "archived": mid in arch, "profiles": profile_files(mid),
-                        "cache_bytes": du_bytes(os.path.join(CACHE_ROOT, d))}
+                        # payload(), not du: Xet-backed weights sit outside the
+                        # repo dir, so a plain du understates the model by ~10x
+                        "cache_bytes": payload(mid)["bytes"]}
     for mid, m in arch.items():
         row = out.setdefault(mid, {"id": mid, "engine": m.get("engine", engine_for(mid)),
                                    "cached": False, "archived": True,
