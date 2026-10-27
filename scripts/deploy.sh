@@ -37,7 +37,7 @@ done
 echo "==> installing scripts -> ~/.local/bin"
 install -m 0755 "$HERE"/scripts/{spark-vllm-podman-start-select,spark-vllm-podman-start,spark-vllm-podman-stop,spark-vllm-podman-health,spark-vllm-watchdog,miaai_launch.sh,vllm-model-set,switch.sh} \
   "$HOME/.local/bin/"
-install -m 0644 "$HERE"/scripts/{vllm-model-select.py,vllm-model-add.py} "$HOME/.local/bin/"
+install -m 0644 "$HERE"/scripts/{vllm-model-select.py,vllm-model-add.py,vllm-model-archive.py} "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-evict-cache.py "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-warmup.sh "$HOME/"
 
@@ -93,7 +93,11 @@ if [ "$ALL" = 1 ]; then
   echo "==> syncing scripts to worker ($HOST_ALIAS)"
   ssh -o BatchMode=yes "$HOST_ALIAS" 'mkdir -p ~/.local/bin'
   scp -q "$HERE"/scripts/{spark-vllm-podman-stop,miaai_launch.sh,vllm-model-set} "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
+  # the archive tool is per node: each spark has its own disk and its own
+  # ARCHIVE_PATH, so the worker gets the helper too (configure it there).
+  scp -q "$HERE"/scripts/vllm-model-archive.py "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
   echo "    (worker only needs runtime helpers; full launch is driven from head)"
+  echo "    (worker archive: ssh $HOST_ALIAS vllm-model-archive --set-path /archive)"
 fi
 
 echo "==> done. Verify with ./scripts/verify-deployment.sh then vllm-model-select --status"

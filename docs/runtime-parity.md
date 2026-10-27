@@ -22,7 +22,8 @@ vllm-model-select --status       # orchestration state + live engine probe
 `scripts/verify-deployment.sh` compares the repo tree against the installed
 copies (`cmp`, not hard-coded hashes), so it catches drift in either direction:
 
-- the ten deployed scripts in `~/.local/bin` plus `~/spark-vllm-warmup.sh`
+- the deployed scripts in `~/.local/bin` (runtime scripts, the selector TUI and
+  `vllm-model-archive.py`) plus `~/spark-vllm-warmup.sh`
 - every `config/flags/*` file in `~/.config/spark-vllm/flags/`
 - the three `spark-vllm-*.service` units and `spark-vllm-podman.service.d/override.conf`
 - the `vllm-model-select` launcher: must be the venv **wrapper**, not a symlink
@@ -136,6 +137,24 @@ These are **not** repo artifacts and must not be copied between hosts:
 The worker (`gx10-02`) needs no orchestration scripts: the head drives the
 launch, and the worker only needs the container runtime, the model files and the
 runtime helpers copied by `deploy.sh --all`.
+
+## Archive tool (added 2026-10-27)
+
+`vllm-model-archive.py` plus the `x` / `u` / `p` keys in the selector let a
+checkpoint move to an external ext4 disk and back, so several models can be kept
+without several hundred GB of internal disk. Procedure and layout:
+[docs/archive.md](archive.md).
+
+Parity notes:
+
+- `deploy.sh` installs the helper (and `--all` copies it to the worker, which has
+  its own disk and its own `ARCHIVE_PATH`).
+- The helper is reported as `WARN`, not `FAIL`, when missing: a head that has not
+  been re-deployed keeps working, with archive/unarchive disabled.
+- Archiving never touches the parity-checked configuration: flags profiles,
+  `model.conf`, `locked.conf` and the units stay byte-identical; only the HF cache
+  tree moves. `verify-deployment.sh` therefore still passes on a head with
+  archived models.
 
 ## Reproducing from scratch
 

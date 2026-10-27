@@ -61,7 +61,8 @@ tools/              extra tooling (benchmark harness, sweep)
 | `spark-vllm-podman-start-select` | systemd ExecStart. Reads `model.conf`, dispatches per model: flash-next → `miaai_launch.sh`; anything else → b12x `launch-cluster.sh` (unchanged path). Also forwards per-model `<flags>.env` vars into the container (`-e`). |
 | `miaai_launch.sh` | Native flash-next stack: renders the MiaAI runbook `.env` from `model.conf` + per-model env + fabric constants, runs `start.sh --launch`, keeps the unit alive after readiness. |
 | `vllm-model-set` | `vllm-model-set <hf-id> [alias] [--apply]` — the one switch surface. Writes `model.conf`, pauses watchdog, stops unit, **removes both container names (`vllm_node`, `vllm-fn`) on both nodes**, evicts the checkpoint page cache (OOM race), starts, waits for the readiness gate + smoke, restores watchdog. |
-| `vllm-model-select.py` / `vllm-model-add.py` | model list / add + lock / delete / `--status` (orchestration state + live engine probe). |
+| `vllm-model-select.py` / `vllm-model-add.py` | model list / add + lock / delete / `--status` (orchestration state + live engine probe). The selector TUI also does archive/unarchive (`x` / `u`) and archive-path setup (`p`). |
+| `vllm-model-archive.py` | checkpoint archive engine behind those keys: `--set-path`, `--status`, `--list`, `--archive`, `--unarchive` (+`--dry-run`, `--json`). Copies a model's cache tree to the archive disk, verifies it file-by-file, frees the internal copy, and refuses an unarchive that would not fit. |
 | `vllm-model-select` | Launcher for the selector above: execs `vllm-model-select.py` with the `urwid` venv interpreter (`~/.local/share/vllm-tui/venv`). Must stay a **wrapper** — a symlink to the `.py` resolves to system python and dies on `import urwid`. |
 | `setup-tui-venv.sh` | Creates that venv (`urwid==4.2.5`). Called by `deploy.sh`; falls back to `uv` on images without `ensurepip`. |
 | `switch.sh` | `switch.sh {status\|list\|to <model-id> [--apply]}` — one obvious command for the daily switch, thin wrapper over the two above. |
@@ -92,6 +93,24 @@ vllm-model-select --status
 `--apply` does: watchdog pause → stop → remove both stacks' containers (both
 nodes) → evict page cache → start (dispatcher picks the engine) → readiness
 gate + smoke → watchdog restore. Typical Apply time: 7–13 min.
+
+## Model archive (external disk)
+
+The internal NVMe holds only a couple of checkpoints, so models can be
+**archived** to an external ext4 disk instead of deleted: the cached data moves
+to `<archive>/models/<name>/`, the profile (flags, alias, lock) stays, and the
+model stays listed in the selector — greyed out and not selectable until it is
+unarchived. Space is freed as soon as the copy is verified.
+
+```bash
+vllm-model-archive --set-path /archive    # once per node (or press p in the TUI)
+vllm-model-select                          # x: archive, u: unarchive, p: path
+```
+
+Unarchiving is pre-checked against free space on the internal filesystem and
+refuses with a list of models to archive first when it would not fit. Setup
+(mkfs/fstab/ownership), the on-disk layout and the exact move/verify/delete
+sequence are in [docs/archive.md](docs/archive.md).
 
 ## Fresh install (from scratch)
 
@@ -219,8 +238,10 @@ not in this repo**. The templates and defaults live under `config/`; scripts
 overwrites an existing `model.conf` (use `--force-config` to reset it).
 
 Also not tracked: `~/spark-vllm-docker` (separate fork), `~/miaai-qwen38`
-(produced by `podman-adapt-runbook.sh`) and `~/.local/share/vllm-tui/venv`
-(selector tooling). Full list in [docs/runtime-parity.md](docs/runtime-parity.md).
+(produced by `podman-adapt-runbook.sh`), `~/.local/share/vllm-tui/venv`
+(selector tooling) and `~/.config/spark-vllm/archive.conf` (per-node archive
+path). Archived checkpoints live on the external disk, not in the repo. Full
+list in [docs/runtime-parity.md](docs/runtime-parity.md).
 
 ## Monitoring & alerting
 

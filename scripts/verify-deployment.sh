@@ -124,6 +124,31 @@ else
 fi
 
 echo
+echo "-- archive tool"
+if [ -e "$BIN/vllm-model-archive.py" ]; then
+  check_file "$HERE/scripts/vllm-model-archive.py" "$BIN/vllm-model-archive.py"
+  if arc_json="$(python3 "$BIN/vllm-model-archive.py" --status --json 2>&1)"; then
+    arc_line="$(printf '%s' "$arc_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("unparsable status")
+    raise SystemExit
+path = d.get("archive_path") or "(not configured)"
+state = "mounted" if d.get("mounted") else "NOT mounted"
+n = len(d.get("archived") or [])
+print("%s | %s | %d archived" % (path, state, n))
+' 2>/dev/null)"
+    ok "archive: ${arc_line:-?}"
+  else
+    bad "vllm-model-archive --status failed"
+  fi
+else
+  note "$BIN/vllm-model-archive.py not installed (deploy.sh installs it; archive/unarchive disabled)"
+fi
+
+echo
 echo "-- live status probe"
 if status_out="$("$BIN/vllm-model-select" --status 2>&1)"; then
   ok "vllm-model-select --status"

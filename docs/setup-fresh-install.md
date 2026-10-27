@@ -58,6 +58,24 @@ podman run --rm --device nvidia.com/gpu=all nvidia/cuda:12.6.0-base nvidia-smi
 
 The b12x launcher uses `--gpus all`; podman accepts it on this kit.
 
+## 2b. Archive disk (optional, recommended)
+
+With four checkpoints the internal NVMe is ~70% full, so give each node an
+external ext4 disk for archiving. Full procedure (mkfs, fstab, ownership,
+caveats) in [docs/archive.md](archive.md); the short version per node:
+
+```bash
+sudo mkfs.ext4 -m 0 -L archive /dev/sda          # after wipefs; USB SSD
+sudo mkdir -p /archive && sudo mount /dev/sda /archive
+echo "UUID=$(sudo blkid -s UUID -o value /dev/sda)  /archive  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2" | sudo tee -a /etc/fstab
+sudo chown kambiz:kambiz /archive
+vllm-model-archive --set-path /archive           # per node, after deploy.sh
+```
+
+`nofail` keeps the cluster booting when the disk is unplugged; archive
+operations then refuse instead of writing into an empty mountpoint. ext4 is
+required because the HF cache is symlink-based.
+
 ## 3. Systemd user units (head)
 
 ```bash
