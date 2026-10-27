@@ -15,6 +15,7 @@ Non-interactive:
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -56,19 +57,48 @@ def archive_call(*args, timeout=30):
         return {"ok": False, "error": (r.stderr or r.stdout).strip()[:200]}
 
 
+def tree_bytes(path):
+    """Apparent size of a cache tree, hardlinks once, symlinks not followed."""
+    total, seen = 0, set()
+    for root, dirs, names in os.walk(path, followlinks=False):
+        for n in names + dirs:
+            p = os.path.join(root, n)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if os.path.islink(p) or not os.path.isfile(p):
+                continue
+            key = (st.st_dev, st.st_ino)
+            if key in seen:
+                continue
+            seen.add(key)
+            total += st.st_size
+    return total
+
+
 def archive_list():
     res = archive_call("--list", timeout=90)
     if res.get("models"):
         return res
-    # helper missing: fall back to the plain cache scan so the TUI still works
+    # helper missing: fall back to a plain cache scan so the TUI still works
     conf = archive_call("--status")
-    rows = [{"id": m["id"], "engine": "miaai" if "Qwen3.8-Flash-Next-NVFP4" in m["id"] else "b12x",
-             "state": "cached", "cached": True, "archived": False,
-             "cache_bytes": 0, "archive_bytes": 0, "current": False}
-            for m in scan_models()]
+    rows = []
+    for m in scan_models():
+        rd = os.path.join(HUB, "models--" + m["id"].replace("/", "--"))
+        rows.append({"id": m["id"],
+                     "engine": "miaai" if "Qwen3.8-Flash-Next-NVFP4" in m["id"] else "b12x",
+                     "state": "cached", "cached": True, "archived": False,
+                     "cache_bytes": tree_bytes(rd), "archive_bytes": 0,
+                     "current": False})
+    try:
+        free = shutil.disk_usage(HUB).free
+    except OSError:
+        free = 0
     return {"ok": False, "configured": conf.get("configured", False),
             "archive_path": conf.get("archive_path", ""),
-            "cache_free_bytes": 0, "models": rows}
+            "cache_free_bytes": free, "models": rows,
+            "note": "archive tool unavailable - run deploy.sh to enable x/u/p"}
 
 
 def safe_name(mid):
@@ -193,6 +223,8 @@ def run_list():
     free = res.get("archive_free_bytes")
     print(f"archive: {arch}" + (f"  free {human(free)}" if free else ""))
     print(f"cache:   free {human(res.get('cache_free_bytes'))}")
+    if res.get("note"):
+        print(f"note:    {res['note']}")
 
 
 class PickRow(urwid.Text):
