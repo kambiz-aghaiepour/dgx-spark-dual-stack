@@ -278,7 +278,7 @@ def run_list():
         per = m.get("nodes") or {}
         sizes = " ".join(f"{human((per.get(n) or {}).get('bytes') or 0):>9}" for n in order)
         flags = []
-        if m.get("current") or m["id"] == cur:
+        if m.get("current") or (m["id"] == cur and st["STACK"] != "tensorfold"):
             flags.append("current")
         if m.get("serving"):
             flags.append("live")
@@ -391,10 +391,11 @@ class Selector:
 
     def build_rows(self):
         cur, rows = self.conf.get("MODEL_ID", ""), []
+        vllm_active = read_stack().get("STACK") != "tensorfold"
         order = node_order(self.arch)
         for m in self.models:
             mark = ">" if m["id"] == self.pending else " "
-            is_cur = (m.get("current") if m.get("tf") else m["id"] == cur)
+            is_cur = (m.get("current") if m.get("tf") else (m["id"] == cur and vllm_active))
             curm = "*" if is_cur else " "
             locked = " [LOCKED]" if m["id"] in locks() else ""
             archived = not m.get("cached")
@@ -440,6 +441,9 @@ class Selector:
             if tf == "active":
                 return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
                         f"(port 8888, separate stack)")
+            if tf == "inactive" and tf_serving():
+                return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
+                        f"(port 8888, started outside systemd)")
             if tf in ("activating", "reloading"):
                 return "\u26a0 SWITCH IN PROGRESS -> TensorFold (stack starting)"
             if tf == "failed":
@@ -485,8 +489,10 @@ class Selector:
         if not self.arch.get("configured"):
             sug = self.arch.get("suggested_path")
             parts.append(f"{sug} detected - p to enable" if sug else "p to set the archive path")
-        lines = [f" vllm-model-select | current: {self.conf.get('MODEL_ID', '')} as "
-                 f"{self.conf.get('SERVED_MODEL_NAME', '')} | {n_cache} cached, {n_arch} archived",
+        stk = read_stack()
+        now = (f"tensorfold:{stk['TF_PROFILE']}" if stk.get("STACK") == "tensorfold"
+               else f"{self.conf.get('MODEL_ID', '')} as {self.conf.get('SERVED_MODEL_NAME', '')}")
+        lines = [f" vllm-model-select | current: {now} | {n_cache} cached, {n_arch} archived",
                  " " + " | ".join(parts)]
         if self.bg:
             lines.append(f" \u23f3 {self.bg_label} running - footer shows the result")

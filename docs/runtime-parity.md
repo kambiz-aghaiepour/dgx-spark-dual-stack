@@ -48,7 +48,7 @@ Hashes of the runtime scripts at audit time (still current):
 
 | File | SHA256 |
 |---|---|
-| `scripts/vllm-model-select.py` | `fface8571a7bcc4ea89b56e0ceafac0c55b97d4253a84628a479d14b576c003c` |
+| `scripts/vllm-model-select.py` | `0bb7634a1fec770924727dceba0b928fda28b04ce2f8552f0ae2488a414e5128` |
 | `scripts/vllm-model-set` | `36e19fa235e449c567a8957ce3e3d2fa506b0dd73d6a53abb0e1d5f8ba2fdfa2` |
 | `scripts/spark-vllm-watchdog` | `6fca2e47a5fce0023c5493f8c575a50be9a3f4ba15cb9e32eb8649338b323e33` |
 | `scripts/spark-vllm-podman-start-select` | `2c74eaf23ddc011b58b35629410ec5f078e3083c5b8d7f802469265a83373cc4` |
