@@ -267,6 +267,13 @@ def run_list():
     order = node_order(res)
     print(f"{'MODEL':44} {'ENGINE':5} {'STATE':9} "
           + " ".join(f"{n.upper():>9}" for n in order) + "  status")
+    # the second stack is not a cache entry, but it can be what the pair is serving
+    st = read_stack()
+    prof = st.get("TF_PROFILE") or TF_PROFILE_DEFAULT
+    blank = " ".join(f"{'':>9}" for _ in order)
+    print(f"{'tensorfold:' + prof:<44} {'tf':<5} {'stack':<9} {blank}  "
+          f"{'running' if tf_serving() else 'stopped'}"
+          f"{'  STACK' if st['STACK'] == 'tensorfold' else ''}")
     for m in res["models"]:
         per = m.get("nodes") or {}
         sizes = " ".join(f"{human((per.get(n) or {}).get('bytes') or 0):>9}" for n in order)
