@@ -529,7 +529,7 @@ class Selector:
             return True
         mid = row["id"]
         if row.get("tf"):
-            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to archive"
+            self.msg = "tensorfold is a stack, not a checkpoint - nothing to archive"
             self.refresh()
             return True
         if not row.get("cached"):
@@ -585,7 +585,7 @@ class Selector:
             return True
         mid = row["id"]
         if row.get("tf"):
-            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to unarchive"
+            self.msg = "tensorfold is a stack, not a checkpoint - nothing to unarchive"
             self.refresh()
             return True
         if not row.get("archived"):
