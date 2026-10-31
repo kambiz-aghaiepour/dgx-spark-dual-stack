@@ -95,18 +95,31 @@ fetch_dealign_direct() {
   . "$env_file"
   : "${MODEL_VIEW:?profile must set MODEL_VIEW}"
   local dl="${DOWNLOAD_DIR:-$MODEL_VIEW.src}"
-  command -v hf >/dev/null || die "the 'hf' command is missing (pip install -U huggingface_hub[cli])"
   mkdir -p "$dl" "$MODEL_VIEW/model" "$MODEL_VIEW/engram"
+  local meta=(model.safetensors.index.json config.json exl3_k_map.json quantization_config.json
+              tokenizer.json tokenizer_config.json)
   log "downloading $DEALIGN_REPO @ ${DEALIGN_REV:0:12} into $dl (~416 GB, resumable)"
-  hf download "$DEALIGN_REPO" --revision "$DEALIGN_REV" --local-dir "$dl" || die "download failed; run the same command again to resume"
+  if command -v hf >/dev/null; then
+    hf download "$DEALIGN_REPO" --revision "$DEALIGN_REV" --local-dir "$dl" || die "download failed; run the same command again to resume"
+  else
+    # No CLI: the same files straight from the CDN, resumed where they stopped.
+    log "the 'hf' command is missing - using curl (installs nothing)"
+    local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $HF_TOKEN")
+    local f i
+    for f in $(for i in $(seq -w 1 43); do echo "model-000${i}-of-00043.safetensors"; done) \
+             model-00047-of-00048.safetensors model-00048-of-00048.safetensors "${meta[@]}"; do
+      [ -s "$dl/$f" ] && [ "$(stat -c %s "$dl/$f")" -gt 1024 ] && { log "have $f"; continue; }
+      log "get  $f"
+      curl -fL --retry 5 --retry-delay 5 -C - --create-dirs "${auth[@]}" \
+        -o "$dl/$f" "https://huggingface.co/$DEALIGN_REPO/resolve/$DEALIGN_REV/$f" \
+        || die "download of $f failed; run the same command again to resume"
+    done
+  fi
   log "building the view $MODEL_VIEW (hard links, no second copy)"
-  local f base
-  for f in "$dl"/model-000[0-4][0-9]-of-00043.safetensors \
-           "$dl"/config.json "$dl"/tokenizer.json "$dl"/tokenizer_config.json \
-           "$dl"/exl3_k_map.json "$dl"/quantization_config.json; do
+  local base
+  for f in "$dl"/model-000[0-4][0-9]-of-00043.safetensors "${meta[@]/#/$dl/}"; do
     [ -e "$f" ] || continue
     base=$(basename "$f")
-    case "$base" in model-00047-of-00048.safetensors|model-00048-of-00048.safetensors) continue ;; esac
     [ -e "$MODEL_VIEW/model/$base" ] || ln "$f" "$MODEL_VIEW/model/$base"
   done
   for f in "$dl"/model-00047-of-00048.safetensors "$dl"/model-00048-of-00048.safetensors \
