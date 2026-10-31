@@ -129,6 +129,7 @@ def configured_node_name():
 
 LOCAL_NODE = configured_node_name()
 WORKER_HOST = os.environ.get("WORKER", "gx10-02")
+HEAD_HOST = os.environ.get("SPARK_VLLM_HEAD_HOST", "gx10-01")
 HELPER = os.environ.get("SPARK_VLLM_ARCHIVE_HELPER", "~/.local/bin/vllm-model-archive.py")
 REMOTE_CMD = os.environ.get(
     "SPARK_VLLM_REMOTE_CMD",
@@ -151,7 +152,9 @@ def set_local_node(name):
 
 
 def node_host(node):
-    return "" if node == LOCAL_NODE else WORKER_HOST
+    if node == LOCAL_NODE:
+        return ""
+    return HEAD_HOST if node == "head" else WORKER_HOST
 
 
 def _json_from(text):
