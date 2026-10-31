@@ -1,5 +1,5 @@
 [Unit]
-Description=Spark TensorFold EXL3 cluster (DeepSeek-V4.1, TP=2, port 8888)
+Description=Spark TensorFold (MiaAI DSv4.1 native-Zig, TP=2, port 8000)
 After=network-online.target
 Wants=network-online.target
 

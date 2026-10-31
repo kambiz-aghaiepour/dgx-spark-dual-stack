@@ -29,8 +29,8 @@ WORKER = "gx10-02"
 PATH_SETTER = os.path.expanduser("~/.local/bin/vllm-model-set")
 STACK_CONF = os.path.expanduser("~/.config/spark-vllm/stack.conf")
 STACK_SWITCH = os.path.expanduser("~/.local/bin/spark-stack-switch")
-TF_URL = os.environ.get("SPARK_TENSORFOLD_ENGINE_URL", "http://127.0.0.1:8888")
-TF_PROFILE_DEFAULT = "dealign-direct"
+TF_URL = os.environ.get("SPARK_TENSORFOLD_ENGINE_URL", "http://127.0.0.1:8000")
+TF_PROFILE_DEFAULT = "mia-dsv41"
 LOCKS = os.path.expanduser("~/.config/spark-vllm/locked.conf")
 FLAGS_DIR = os.path.expanduser("~/.config/spark-vllm/flags")
 ARCHIVER = os.path.expanduser("~/.local/bin/vllm-model-archive.py")
@@ -440,10 +440,10 @@ class Selector:
                 return ""
             if tf == "active":
                 return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
-                        f"(port 8888, separate stack)")
+                        f"(port 8000, separate stack)")
             if tf == "inactive" and tf_serving():
                 return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
-                        f"(port 8888, started outside systemd)")
+                        f"(port 8000, started outside systemd)")
             if tf in ("activating", "reloading"):
                 return "\u26a0 SWITCH IN PROGRESS -> TensorFold (stack starting)"
             if tf == "failed":
@@ -985,9 +985,9 @@ def run_status():
         try:
             with urllib.request.urlopen(urllib.request.Request(TF_URL + "/v1/models"),
                                         timeout=4) as r:
-                engine = json.load(r)["data"][0]["id"] + " (port 8888)"
+                engine = json.load(r)["data"][0]["id"] + " (port 8000)"
         except Exception:
-            engine = "(not answering on 8888)"
+            engine = "(not answering on 8000)"
     if unit == "activating" or applying:
         print(f"switch:       IN PROGRESS -> {conf.get('MODEL_ID', '?')}")
     elif unit == "active":

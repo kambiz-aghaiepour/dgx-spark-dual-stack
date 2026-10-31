@@ -1,11 +1,6 @@
 #!/bin/bash
-# Stop the TensorFold stack for the systemd user unit (ExecStop).
+# Stop the TensorFold stack (MiaAI-Lab DSv4.1 recipe).
 set -euo pipefail
-REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
-CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
-PROFILE="${SPARK_TENSORFOLD_PROFILE:-}"
-if [ -z "$PROFILE" ] && [ -f "$CONF" ]; then
-  PROFILE=$(sed -n 's/^TF_PROFILE=//p' "$CONF" | head -1)
-fi
-[ -n "$PROFILE" ] || PROFILE=dealign-direct
-exec "$REPO/scripts/tensorfold-model.sh" stop "$PROFILE"
+MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
+[ -x "$MIA_DIR/stop.sh" ] || { echo "spark-tensorfold-stop: no $MIA_DIR/stop.sh - nothing to do"; exit 0; }
+exec "$MIA_DIR/stop.sh"

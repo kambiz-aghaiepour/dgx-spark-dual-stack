@@ -46,7 +46,7 @@ mesh — see [docs/setup-fresh-install.md](docs/setup-fresh-install.md).
 scripts/            deployment + switching + supervision scripts (see below)
 config/model.conf.template
 config/flags/       per-model flags files (vLLM serve args) + per-model .env
-config/tensorfold/  profiles for the separate TensorFold stack (DSv4.1)
+config/              model flags + the MiaAI DSv4.1 recipe settings example
 systemd/            user units (podman/health/warmup, optional exporters)
                     + the override.conf that wires start-select
 docs/               fresh-install, architecture notes, benchmarking,
@@ -121,27 +121,25 @@ that is active — the `model.conf` boot default or whatever the engine is servi
 model/engine first. Setup (mkfs/fstab/ownership), the on-disk layout and the
 exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
-## Second stack: TensorFold (DeepSeek-V4.1-Flash, EXL3)
+## Second stack: TensorFold (DeepSeek-V4.1-Flash, MiaAI native-Zig)
 
-A separate engine stack for the EXL3 packs, run instead of vLLM and never beside it
-(one server at a time fits in 121 GiB/node). Port 8888, exllamav3-derived engine,
-podman instead of docker:
+A separate engine stack for DeepSeek-V4.1-Flash, run instead of vLLM and never beside it
+(one server at a time fits in 121 GiB/node). Port 8000 (shared with the vLLM stack; only
+one runs at a time), TensorFold's native Zig engine from the MiaAI-Lab recipe, docker:
 
 ```bash
-cp config/tensorfold/cluster.env.example ~/.config/spark-vllm/tensorfold/cluster.env
-./scripts/tensorfold-engine.sh build dealign-direct   # engine image on both nodes
-./scripts/tensorfold-model.sh  fetch dealign-direct   # ~416 GB, view + worker copy
-./scripts/tensorfold-model.sh  start dealign-direct
-./scripts/tensorfold-model.sh  verify dealign-direct
+./scripts/setup-mia-recipe.sh                 # clone the pinned recipe -> ~/mia-dsv41
+$EDITOR ~/mia-dsv41/scripts/local.sh           # WORKER, HF_CACHE, worker cache/engram dirs
+cd ~/mia-dsv41 && ./start.sh                   # first run: image build + ~400 GB download
 ```
 
-Profiles: `dealign-direct` (the abliterated EXL3 2.9 bpw bundle) and `base` (LibertAI
-pack). `dealign-direct` is verified on the pair: 5/5 API checks, 51 tok/s decode,
-131072 context, 103 GiB per node. Setup, space, memory, the BF16 engine revision it
-needs and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
+The recipe serves `DeepSeek-V4.1-Flash-1017` (EXL3 EAQ 2.9 bpw + the base model's Engram
+tables) with the full 1,048,576-token window, DSpark drafts and 4 streams. Weights and the
+rank cache live under `/archive/hf` (head) and `/archive/mia/{engram,rank-cache}` (worker);
+the head exports `/archive/hf` over NFS to the worker's CX7 address.
 
-Switching between the stacks is a row in the selector (`tensorfold:dealign-direct`, first
-row) and a CLI: `spark-stack-switch --status | tensorfold [profile] --apply | vllm`.
+Switching between the stacks is a row in the selector (`tensorfold:mia-dsv41`, first row)
+and a CLI: `spark-stack-switch --status | tensorfold --apply | vllm`.
 `~/.config/spark-vllm/stack.conf` records the choice, and each stack has its own watchdog:
 `spark-tensorfold-watchdog.service` (idle unless stack.conf says tensorfold) next to the
 existing `spark-vllm-health.service` (idle while TensorFold owns the pair).
