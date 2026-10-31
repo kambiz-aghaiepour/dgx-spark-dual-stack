@@ -24,7 +24,7 @@ The recipe itself is third-party (Apache-2.0) and lives outside this repo, at
 - The Hugging Face CLI (`hf`) on the head. `prepare.sh` downloads ~400 GB.
 - An NFS export of the head's `HF_CACHE` to the worker's CX7 address, because the worker
   reads the checkpoint over NFS:
-  `/archive/hf 192.168.177.12(rw,sync,no_subtree_check,no_root_squash)` in `/etc/exports`,
+  `/srv/mia/hf 192.168.177.12(rw,sync,no_subtree_check,no_root_squash)` in `/etc/exports`,
   then `sudo exportfs -ra && sudo systemctl enable --now nfs-server`.
 - ~500 GB free on `/archive` on each node; the worker's Engram copy and rank cache live on
   its own `/archive`.
@@ -33,9 +33,12 @@ The recipe itself is third-party (Apache-2.0) and lives outside this repo, at
 
 | Path | What |
 |---|---|
-| `/archive/hf` (head) | HF cache: checkpoint, Engram shards, kit, rank 0 cache |
-| `/archive/mia/engram` (worker) | Engram tables, local copy (fast random reads) |
-| `/archive/mia/rank-cache` (worker) | rank 1 weight file (~99 GiB) |
+| `/srv/mia/hf` (head) | HF cache: checkpoint, Engram shards, kit, rank 0 cache |
+| `/srv/mia/engram` (worker) | Engram tables, local copy (fast random reads) |
+| `/srv/mia/rank-cache` (worker) | rank 1 weight file (~99 GiB) |
+
+All of these are on each node's internal NVMe. `/archive` is the external USB volume and is
+reserved for archived vLLM models; no running engine reads from it.
 
 ## First setup
 
@@ -48,7 +51,8 @@ cd ~/mia-dsv41 && ./verify.sh                 # five real requests against the A
 
 `start.sh` auto-runs `prepare.sh` when the image, checkpoint, weight files or worker copies
 are missing; `DRY_RUN=1 ./start.sh` prints both ranks' docker commands without changing
-anything.
+anything. The official control path is `spark-stack-switch` (it starts/stops the systemd
+unit); `./start.sh` is the recipe's implementation detail and is what the unit runs.
 
 ## Switching
 

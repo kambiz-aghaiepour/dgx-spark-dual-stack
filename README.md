@@ -134,9 +134,10 @@ cd ~/mia-dsv41 && ./start.sh                   # first run: image build + ~400 G
 ```
 
 The recipe serves `DeepSeek-V4.1-Flash-1017` (EXL3 EAQ 2.9 bpw + the base model's Engram
-tables) with the full 1,048,576-token window, DSpark drafts and 4 streams. Weights and the
-rank cache live under `/archive/hf` (head) and `/archive/mia/{engram,rank-cache}` (worker);
-the head exports `/archive/hf` over NFS to the worker's CX7 address.
+tables) with the full 1,048,576-token window, DSpark drafts and 4 streams. Running data
+lives on the internal NVMe: `/srv/mia/hf` (head) and `/srv/mia/{engram,rank-cache}`
+(worker); the head exports `/srv/mia/hf` over NFS to the worker's CX7 address. `/archive`
+(the USB volume) holds archived vLLM models only, never a running stack.
 
 Switching between the stacks is a row in the selector (`tensorfold:mia-dsv41`, first row)
 and a CLI: `spark-stack-switch --status | tensorfold --apply | vllm`.
