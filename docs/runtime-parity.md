@@ -48,10 +48,10 @@ Hashes of the runtime scripts at audit time (still current):
 
 | File | SHA256 |
 |---|---|
-| `scripts/vllm-model-select.py` | `d4332ec32c9c38cc7cf1cd9f3b77010a3d054b17dd97cace35a68356055bf447` |
-| `scripts/vllm-model-set` | `9e0706774a4c0da95bc1ef71b1e214e8c7e1df02db8133d3c7722e9e9930332b` |
-| `scripts/spark-vllm-watchdog` | `8aa1e3b6e12c136ec89d70756f06304f4232be014003ee3936f96542c0b2d9e9` |
-| `scripts/spark-vllm-podman-start-select` | `0f3904b1a67d51dca2df7c6891b44e42a3531f7e39dd19d1e2892fa003601e0e` |
+| `scripts/vllm-model-select.py` | `9bb99b3ac9863afe55cd3de713c533b88c33f0918c07c58a3ec12d7f49c6f728` |
+| `scripts/vllm-model-set` | `36e19fa235e449c567a8957ce3e3d2fa506b0dd73d6a53abb0e1d5f8ba2fdfa2` |
+| `scripts/spark-vllm-watchdog` | `6fca2e47a5fce0023c5493f8c575a50be9a3f4ba15cb9e32eb8649338b323e33` |
+| `scripts/spark-vllm-podman-start-select` | `2c74eaf23ddc011b58b35629410ec5f078e3083c5b8d7f802469265a83373cc4` |
 | `scripts/spark-vllm-podman-start` | `3952cd456d8ae5710050771e913991e8f84068dcbcc953d48024582517a5edbc` |
 | `scripts/spark-vllm-podman-stop` | `26da487e7adeb62cc31189b91d813cecf4c48492449aa7fd55fcfe27c9753bff` |
 | `scripts/spark-vllm-podman-health` | `1d343e2b561412f99da29197138348f763f5058fb53049a6c8b1b9fef15d55a3` |
@@ -59,6 +59,13 @@ Hashes of the runtime scripts at audit time (still current):
 | `scripts/vllm-model-add.py` | `d2f8662d937cf8e140126aa99837460246416facc18f6cd68c0261eac40814b1` |
 | `scripts/miaai_launch.sh` | `4cf2295d3385ec6caaf2c4940a2751d777e77f6cb50957561a24559d66965f62` |
 | `scripts/spark-vllm-warmup.sh` | `29f35b59bae0af53d01230de69600a6f171333ef6acab4a2fb604ebd33820191` |
+| `scripts/spark-stack-switch` | `c3296949a22e295b86bd4c68ae6423082dae99f104d4da40c59f08cf38cf02d9` |
+| `scripts/spark-tensorfold-start` | `5e6b0a803b796d61b52e203ffa1b03a7b5f022fd65c0742e15f14081315fac36` |
+| `scripts/spark-tensorfold-stop` | `40e63bfbdb4743fe2172e00af288b492996799f340b58811fc58a3cb26f38e77` |
+| `scripts/spark-tensorfold-health` | `1c15af2c66eb4af0c28a08a0c03c686212a77fc74b72a47ab4279ff50ca5aa3b` |
+| `scripts/spark-tensorfold-watchdog` | `c81b304c49047ea63ce19a199e0818cd1106be732299442f88f6a553a40d1edb` |
+| `systemd/spark-tensorfold.service` | `6e2d079d98e1d29ec34a930233d7dad164f45930d1aff548bdbca46d66291a3f` |
+| `systemd/spark-tensorfold-watchdog.service` | `d3fcc40c1c3d24e041eff4d0ce2b97b9e62846eee0cab43e33b9f2f3a75a7329` |
 
 ## Gaps and how the repo closes them
 
@@ -189,8 +196,11 @@ cp -a ~/.local/bin/vllm-model-select ~/.local/bin/vllm-model-select.pre-parity
 - `verify-deployment.sh` exits 0 on the head.
 - `vllm-model-select --status` prints `model.conf`, `service`, `watchdog` and
   `live engine` without a traceback.
-- `systemctl --user is-enabled spark-vllm-podman spark-vllm-health spark-vllm-warmup`
-  reports all three as `enabled`.
+- `systemctl --user is-enabled spark-vllm-podman spark-vllm-health spark-vllm-warmup
+  spark-tensorfold spark-tensorfold-watchdog` reports all five as `enabled`.
+- `spark-stack-switch --status` names the stack in `~/.config/spark-vllm/stack.conf` and
+  says which unit and API belong to each stack; the stack that is not switched in reports
+  `inactive`.
 - `~/spark-vllm-docker/mods/busy-loop-fix` and `.../instanttensor-hybrid-draft-loader`
   both exist.
 - A fresh head can run `deploy.sh` and start the service with no manual copying.
