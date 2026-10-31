@@ -105,14 +105,26 @@ fetch_dealign_direct() {
     # No CLI: the same files straight from the CDN, resumed where they stopped.
     log "the 'hf' command is missing - using curl (installs nothing)"
     local auth=(); [ -n "${HF_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $HF_TOKEN")
-    local f i
+    local listing; listing=$(curl -fsSL "https://huggingface.co/api/models/$DEALIGN_REPO/tree/$DEALIGN_REV?recursive=true") \
+      || die "cannot list $DEALIGN_REPO"
+    want_size() {
+      printf '%s' "$listing" | python3 -c 'import json,sys
+p=sys.argv[1]
+print(next((f["size"] for f in json.load(sys.stdin) if f["path"]==p), 0))' "$1"
+    }
+    local f i want have
     for f in $(for i in $(seq -w 1 43); do echo "model-000${i}-of-00043.safetensors"; done) \
              model-00047-of-00048.safetensors model-00048-of-00048.safetensors "${meta[@]}"; do
-      [ -s "$dl/$f" ] && [ "$(stat -c %s "$dl/$f")" -gt 1024 ] && { log "have $f"; continue; }
-      log "get  $f"
-      curl -fL --retry 5 --retry-delay 5 -C - --create-dirs "${auth[@]}" \
+      want=$(want_size "$f"); [ "$want" -gt 0 ] || die "the repo does not list $f"
+      have=$(stat -c %s "$dl/$f" 2>/dev/null || echo 0)
+      if [ "$have" = "$want" ]; then log "have $f"; continue; fi
+      log "get  $f ($((have/1048576)) of $((want/1048576)) MiB)"
+      # http1.1: the CDN cancels HTTP/2 streams on these multi-GB shards; retry-all-errors covers the rest.
+      curl -fL --http1.1 --retry 10 --retry-all-errors --retry-delay 3 -C - --create-dirs "${auth[@]}" \
         -o "$dl/$f" "https://huggingface.co/$DEALIGN_REPO/resolve/$DEALIGN_REV/$f" \
         || die "download of $f failed; run the same command again to resume"
+      have=$(stat -c %s "$dl/$f" 2>/dev/null || echo 0)
+      [ "$have" = "$want" ] || die "$f is incomplete ($have of $want bytes); run the same command again to resume"
     done
   fi
   log "building the view $MODEL_VIEW (hard links, no second copy)"
