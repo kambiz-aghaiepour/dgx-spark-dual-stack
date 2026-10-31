@@ -93,6 +93,15 @@ Two things cost time and are worth knowing:
    unmerged, its head has not passed GPU qualification, and the saved checks do not prove
    every request fits in memory. Treat it as lab work until that lands.
 
+### Network exposure
+
+The profile sets `BIND_HOST=0.0.0.0`, so the engine answers on the head's LAN address
+(`http://192.168.1.39:8888/v1`) as well as loopback, with **no API key** — anything on the home
+network can use it. `tensorfold serve` accepts one `--host`/`--port` pair, so there is no way to
+listen on 8000 as well; 8000 is deliberately left to the vLLM stack, which takes it when you
+switch back. To close the engine again: `BIND_HOST=127.0.0.1` plus an `API_KEY_FILE`, then
+`spark-stack-switch tensorfold --apply`.
+
 ## Switching stacks
 
 `~/.config/spark-vllm/stack.conf` says which stack owns the pair (`STACK=vllm|tensorfold`,
