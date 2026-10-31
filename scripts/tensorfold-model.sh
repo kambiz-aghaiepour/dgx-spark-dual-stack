@@ -148,7 +148,8 @@ print(next((f["size"] for f in json.load(sys.stdin) if f["path"]==p), 0))' "$1"
   # --mkpath: the worker may not have the parent directory yet (rsync 3.2.3+)
   rsync -a --mkpath --info=progress2 "$MODEL_VIEW/" "$WORKER_SSH:$MODEL_VIEW/" || die "rsync to the worker failed"
   log "chat template (MiaAI patch, both nodes)"
-  "$RECIPE_DIR/scripts/patch_template.py" --worker || die "chat template step failed"
+  MODEL_VIEW="$MODEL_VIEW" WORKER_SSH="$WORKER_SSH" \
+    "$RECIPE_DIR/scripts/patch_template.py" --worker || die "chat template step failed"
   log "fetch done. Next: scripts/tensorfold-model.sh start $profile"
 }
 
