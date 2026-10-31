@@ -163,10 +163,11 @@ the per-node result.
 
 ### Rules the tool enforces
 
-- **The active model cannot be archived** — neither the boot default in
-  `model.conf` nor whatever the engine is serving: "cannot archive the current
-  model … switch to another model/engine first". The check runs on both nodes and
-  before any copy.
+- **The active vLLM model cannot be archived, but only while `STACK=vllm`** —
+  neither the vLLM boot choice in `model.conf` nor whatever the engine is serving:
+  "cannot archive the current model … switch to another model/engine first". Under
+  TensorFold the vLLM choice is parked, so it can be archived; switching back
+  refuses until it is unarchived. The check runs on both nodes and before any copy.
 - **Nothing is deleted until every node's copy verifies.** A failure during the
   copy phase rolls the staged archive directories back, so you never get a
   half-archived model.
