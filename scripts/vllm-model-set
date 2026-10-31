@@ -39,15 +39,27 @@ SERVED_MODEL_NAME=$ALIAS
 FLAGS_FILE=$FLAGS_FILE
 EOF
 echo "--- model.conf updated (backup: model.conf.bak) ---"; cat "$CONF"
+# Keep the parked vLLM choice in stack.conf, even when applying is deferred. The
+# archive helper treats that model as the default only while STACK=vllm.
+STACKF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+if [ -f "$STACKF" ]; then
+  tmp=$(mktemp)
+  awk -v id="$ID" '
+    /^VLLM_MODEL=/ { print "VLLM_MODEL=" id; seen=1; next }
+    { print }
+    END { if (!seen) print "VLLM_MODEL=" id }
+  ' "$STACKF" > "$tmp"
+  mv "$tmp" "$STACKF"
+fi
 if $APPLY; then
   export XDG_RUNTIME_DIR=/run/user/1000
-  # Leaving the TensorFold stack for a vLLM model: stop it and its watchdog first, or the
-  # 100 GiB it holds is exactly what this engine needs (and the two never share the pair).
-  STACKF="$HOME/.config/spark-vllm/stack.conf"
-  if [ "$(sed -n 's/^STACK=//p' "$STACKF" 2>/dev/null | head -1)" = tensorfold ]; then
-    echo "leaving the TensorFold stack first"
-    "$HOME/.local/bin/spark-stack-switch" vllm || true
-  fi
+  # The switch refuses to stop the live TensorFold stack when this checkpoint is not
+  # resident on both nodes; abort here instead of leaving no engine running.
+  echo "checking the target model and stopping the other stack"
+  "$HOME/.local/bin/spark-stack-switch" vllm || {
+    echo "not starting vLLM: the stack switch refused (see above)."
+    exit 1
+  }
   apply_int() {
     echo ""
     echo ">>> Interrupt (Ctrl-C/TERM) received: the switch continues in the background."

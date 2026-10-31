@@ -67,6 +67,11 @@ unless `~/.config/spark-vllm/stack.conf` says `STACK=tensorfold`) and
 `spark-tensorfold-watchdog.service` (probes `/v1/models` and a one-token completion on
 port 8000; restarts the unit after 10 consecutive failures; idle under the vLLM stack).
 
+`stack.conf` also records `VLLM_MODEL`, the parked vLLM choice. It is only the default
+while `STACK=vllm`. Under TensorFold it can be archived; `spark-stack-switch vllm` checks
+both nodes and refuses to stop TensorFold until that checkpoint is restored to internal
+NVMe. Use `vllm-model-archive.py --unarchive <id>` (or `u` in the selector).
+
 ## Tuning
 
 Edit `~/mia-dsv41/scripts/local.sh` (layer: environment > local.sh > `.env` > defaults).

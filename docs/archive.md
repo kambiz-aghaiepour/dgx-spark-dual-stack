@@ -12,6 +12,22 @@ Two tools, one state:
   the worker over ssh from the head.
 - `vllm-model-select` — the TUI; `x` archive, `u` unarchive, `p` archive path.
 
+## The default follows the engine, not vLLM
+
+`stack.conf` is the single selection:
+
+```
+STACK=vllm|tensorfold
+TF_PROFILE=mia-dsv41
+VLLM_MODEL=<hf model id>
+```
+
+`VLLM_MODEL` is the default only while `STACK=vllm`. Under TensorFold it is a parked
+choice, so its cache can be archived; it must be unarchived before switching back to vLLM.
+`spark-stack-switch` checks both nodes and refuses to stop TensorFold when the target vLLM
+checkpoint is not resident. A default is always on internal NVMe; the archive disk only
+holds restorable copies and never bootstraps an engine.
+
 ## 1. The disks (one per node)
 
 What we use: a 2 TB USB SSD per Spark (Fikwot FP80, USB 3.2 Gen2x2 enclosure,

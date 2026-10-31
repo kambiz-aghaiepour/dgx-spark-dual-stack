@@ -49,6 +49,7 @@ CACHE_ROOT = os.path.expanduser("~/.cache/huggingface/hub")
 CONF_DIR = os.path.expanduser("~/.config/spark-vllm")
 ARCHIVE_CONF = os.path.join(CONF_DIR, "archive.conf")
 MODEL_CONF = os.path.join(CONF_DIR, "model.conf")
+STACK_CONF = os.path.join(CONF_DIR, "stack.conf")
 FLAGS_DIR = os.path.join(CONF_DIR, "flags")
 DEFAULT_MIN_FREE_GB = 10.0
 # offered as the default in the path prompt when it is a real mount; being
@@ -98,7 +99,16 @@ def save_archive_conf(path, min_free_gb=DEFAULT_MIN_FREE_GB):
 
 
 def boot_model():
-    return read_kv(MODEL_CONF).get("MODEL_ID", "")
+    """The vLLM model that is the active default, or '' when vLLM is not the stack.
+
+    stack.conf is the engine-agnostic selection: STACK=tensorfold parks the vLLM
+    choice (VLLM_MODEL) without making it the default. A missing stack.conf is a
+    legacy vLLM-only install, where model.conf is still the default.
+    """
+    st = read_kv(STACK_CONF)
+    if st.get("STACK", "vllm") != "vllm":
+        return ""
+    return st.get("VLLM_MODEL") or read_kv(MODEL_CONF).get("MODEL_ID", "")
 
 
 # ---------------------------------------------------------------------- nodes
@@ -744,8 +754,9 @@ def archive_local(mid, stage="commit", dry_run=False):
     if stage in ("plan", "copy") or dry_run:
         if mid == boot_model():
             return 2, {"ok": False, "model_id": mid, "reason": "boot default",
-                       "error": (f"cannot archive the current model ({mid}): it is the boot "
-                                 f"default in model.conf - switch to another model/engine first")}
+                       "error": (f"cannot archive the current model ({mid}): "
+                                 f"it is the active vLLM default (STACK=vllm); switch "
+                                 f"the engine or another vLLM model first")}
         live = served_model()
         if live and live == mid:
             return 2, {"ok": False, "model_id": mid, "reason": "serving",

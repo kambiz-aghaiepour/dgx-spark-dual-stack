@@ -115,10 +115,12 @@ then offers to set the same path on the worker; detection alone never counts as
 configured, so each node still needs its own `--set-path` before `x` works.
 
 Unarchiving is pre-checked against free space on the internal filesystem and
-refuses with a list of models to archive first when it would not fit. The model
-that is active — the `model.conf` boot default or whatever the engine is serving
-— cannot be archived at all: the tool refuses and tells you to switch to another
-model/engine first. Setup (mkfs/fstab/ownership), the on-disk layout and the
+refuses with a list of models to archive first when it would not fit. The default
+follows the active engine: while `stack.conf` says `tensorfold`, the vLLM model in
+`VLLM_MODEL` is only a parked choice and can be archived; while it says `vllm`,
+that model is the default and cannot be archived. `spark-stack-switch vllm` checks
+both nodes first and refuses to stop TensorFold for a checkpoint that is still on
+the archive disk. Setup (mkfs/fstab/ownership), the on-disk layout and the
 exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
 ## Second stack: TensorFold (DeepSeek-V4.1-Flash, MiaAI native-Zig)
