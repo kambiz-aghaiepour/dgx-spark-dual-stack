@@ -1,0 +1,11 @@
+#!/bin/bash
+# Stop the TensorFold stack for the systemd user unit (ExecStop).
+set -euo pipefail
+REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
+CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+PROFILE="${SPARK_TENSORFOLD_PROFILE:-}"
+if [ -z "$PROFILE" ] && [ -f "$CONF" ]; then
+  PROFILE=$(sed -n 's/^TF_PROFILE=//p' "$CONF" | head -1)
+fi
+[ -n "$PROFILE" ] || PROFILE=dealign-direct
+exec "$REPO/scripts/tensorfold-model.sh" stop "$PROFILE"

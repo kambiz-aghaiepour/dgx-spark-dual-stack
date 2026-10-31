@@ -104,7 +104,12 @@ def main():
     s.loop = stub_loop(mod)
 
     ids = {m["id"]: m for m in s.models}
-    check("three models listed", set(ids) == {"org/keep", "org/moving", "org/gone"}, list(ids))
+    check("three models plus the stack row", set(ids) == {
+        "tensorfold:dealign-direct", "org/keep", "org/moving", "org/gone"}, list(ids))
+    tf = ids.get("tensorfold:dealign-direct") or {}
+    check("stack row is first and flagged", s.models[0]["id"] == "tensorfold:dealign-direct"
+          and tf.get("tf") is True and tf.get("engine") == "tf", s.models[0])
+    check("stack row selectable", tf.get("cached") is True, tf)
     check("archived model flagged", ids["org/gone"]["cached"] is False
           and ids["org/gone"]["archived"] is True, ids.get("org/gone"))
     check("archived keeps profile", os.path.exists(os.path.join(
@@ -228,6 +233,32 @@ def main():
           "this node only" in s6.msg and not s6.confirming_worker_path, s6.msg)
     os.environ.pop("SPARK_VLLM_NODES", None)
     os.environ.pop("SPARK_VLLM_REMOTE_CMD", None)
+
+    # --- the TensorFold stack row: pick, apply, and the refusals
+    s.refresh()
+    tf_id = "tensorfold:dealign-direct"
+    s.pick(tf_id)
+    check("stack row can be picked", s.pending == tf_id, s.pending)
+    s.loop = stub_loop(mod)
+    try:
+        s.apply_now()
+    except Exception:
+        pass
+    check("apply on the stack row runs the switcher",
+          s.exec_apply == [os.path.join(HOME, ".local/bin/spark-stack-switch"),
+                           "tensorfold", "dealign-direct", "--apply"],
+          s.exec_apply)
+    s.body.set_focus(0)
+    s.msg = ""
+    ok = s.start_archive()
+    check("archive refused for the stack row", ok is True and "HF cache" in s.msg, s.msg)
+    s.msg = ""
+    ok = s.start_unarchive()
+    check("unarchive refused for the stack row", ok is True and "HF cache" in s.msg, s.msg)
+    s.keypress("l")
+    check("lock refused for the stack row", "nothing to lock" in s.msg, s.msg)
+    s.keypress("d")
+    check("delete refused for the stack row", "nothing to delete" in s.msg, s.msg)
 
     print()
     if fails:

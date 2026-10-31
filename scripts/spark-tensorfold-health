@@ -1,0 +1,11 @@
+#!/bin/bash
+# Readiness gate for the TensorFold stack: waits until the API and the worker answer.
+# Used as ExecStartPost and usable by hand (spark-tensorfold-health).
+for i in $(seq 1 150); do
+  curl -fsS -m 10 http://localhost:8888/v1/models >/dev/null 2>&1 && \
+  ping -c1 -W2 192.168.177.12 >/dev/null 2>&1 && {
+    echo "TENSORFOLD HEALTHY (attempt $i)"; exit 0; }
+  sleep 10
+done
+echo "TENSORFOLD NOT HEALTHY after 25 min" >&2
+exit 1

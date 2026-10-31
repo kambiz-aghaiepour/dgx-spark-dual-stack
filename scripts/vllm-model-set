@@ -41,6 +41,13 @@ EOF
 echo "--- model.conf updated (backup: model.conf.bak) ---"; cat "$CONF"
 if $APPLY; then
   export XDG_RUNTIME_DIR=/run/user/1000
+  # Leaving the TensorFold stack for a vLLM model: stop it and its watchdog first, or the
+  # 100 GiB it holds is exactly what this engine needs (and the two never share the pair).
+  STACKF="$HOME/.config/spark-vllm/stack.conf"
+  if [ "$(sed -n 's/^STACK=//p' "$STACKF" 2>/dev/null | head -1)" = tensorfold ]; then
+    echo "leaving the TensorFold stack first"
+    "$HOME/.local/bin/spark-stack-switch" vllm || true
+  fi
   apply_int() {
     echo ""
     echo ">>> Interrupt (Ctrl-C/TERM) received: the switch continues in the background."

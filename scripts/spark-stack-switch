@@ -1,0 +1,106 @@
+#!/bin/bash
+# Switch the pair between the two serving stacks. One stack at a time: both want the
+# whole machine (~100 GiB of 121 per node).
+#
+#   spark-stack-switch tensorfold [profile] [--apply]   # stop vLLM, start TensorFold + its watchdog
+#   spark-stack-switch vllm                              # stop TensorFold + its watchdog (vLLM starts on its own)
+#   spark-stack-switch --status                          # what is written down vs what answers
+#
+# State lives in ~/.config/spark-vllm/stack.conf:
+#   STACK=vllm|tensorfold
+#   TF_PROFILE=dealign-direct
+# The selectors and both watchdogs read it; a missing file means vllm (the old default).
+set -uo pipefail
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
+DEFAULT_PROFILE=dealign-direct
+VLLM_URL=${SPARK_VLLM_ENGINE_URL:-http://127.0.0.1:8000}
+TF_URL=${SPARK_TENSORFOLD_ENGINE_URL:-http://127.0.0.1:8888}
+WORKER=${SPARK_VLLM_WORKER:-gx10-02}
+
+log() { echo "[stack $(date -u +%H:%M:%SZ)] $*"; }
+die() { echo "spark-stack-switch: $*" >&2; exit 1; }
+
+read_stack() {  # echoes vllm or tensorfold
+  local s=""
+  [ -f "$CONF" ] && s=$(sed -n 's/^STACK=//p' "$CONF" | head -1)
+  case "$s" in tensorfold) echo tensorfold ;; *) echo vllm ;; esac
+}
+write_stack() {  # $1 stack, $2 profile
+  mkdir -p "$(dirname "$CONF")"
+  umask 077
+  cat > "$CONF" <<EOF
+# Which serving stack this pair runs (managed by spark-stack-switch).
+# vllm: spark-vllm-podman.service on port 8000. tensorfold: spark-tensorfold.service on port 8888.
+STACK=$1
+TF_PROFILE=${2:-$DEFAULT_PROFILE}
+EOF
+}
+answers() { curl -fsS -m 3 "$1/v1/models" >/dev/null 2>&1; }
+
+case "${1:---status}" in
+  --status|-s)
+    cur=$(read_stack); prof=$(sed -n 's/^TF_PROFILE=//p' "$CONF" 2>/dev/null | head -1)
+    printf 'stack.conf:   %s%s\n' "$cur" "${prof:+ (profile $prof)}"
+    printf 'vllm:         unit %s, api %s\n' \
+      "$(systemctl --user is-active spark-vllm-podman.service 2>/dev/null)" \
+      "$(answers "$VLLM_URL" && echo up || echo down)"
+    printf 'tensorfold:   unit %s, watchdog %s, api %s\n' \
+      "$(systemctl --user is-active spark-tensorfold.service 2>/dev/null)" \
+      "$(systemctl --user is-active spark-tensorfold-watchdog.service 2>/dev/null)" \
+      "$(answers "$TF_URL" && echo up || echo down)"
+    exit 0 ;;
+  vllm|tensorfold) ;;
+  *) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
+
+target=$1; shift || true
+apply=0; profile=$DEFAULT_PROFILE
+for a in "$@"; do
+  case "$a" in
+    --apply) apply=1 ;;
+    -*) : ;;
+    *) profile=$a ;;
+  esac
+done
+
+# --- stop the other stack ----------------------------------------------------------
+if [ "$target" = tensorfold ]; then
+  # The health unit restarts vLLM within a minute, so it goes first.
+  systemctl --user stop spark-vllm-health.service 2>/dev/null
+  systemctl --user stop spark-vllm-podman.service 2>/dev/null
+  for c in vllm_node vllm-fn; do
+    podman rm -f "$c" >/dev/null 2>&1
+    ssh -o BatchMode=yes "$WORKER" "podman rm -f $c >/dev/null 2>&1" >/dev/null 2>&1
+  done
+  write_stack tensorfold "$profile"
+  log "vLLM stopped (unit + containers), stack.conf -> tensorfold/$profile"
+else
+  systemctl --user stop spark-tensorfold-watchdog.service 2>/dev/null
+  systemctl --user stop spark-tensorfold.service 2>/dev/null
+  write_stack vllm "$profile"
+  log "TensorFold stopped (unit + watchdog), stack.conf -> vllm"
+fi
+
+if [ "$apply" = 0 ]; then
+  log "not applied (add --apply to start the $target stack here)"
+  exit 0
+fi
+
+# --- start the target stack --------------------------------------------------------
+if [ "$target" = tensorfold ]; then
+  [ -x "$REPO/scripts/tensorfold-model.sh" ] || die "no launcher at $REPO/scripts/tensorfold-model.sh (set SPARK_TENSORFOLD_REPO_DIR)"
+  systemctl --user reset-failed spark-tensorfold.service 2>/dev/null
+  log "starting spark-tensorfold.service (first start after a change writes the rank caches: minutes)"
+  # restart, not start: the unit is enabled at boot and exits 0 when stack.conf is vllm
+  systemctl --user restart spark-tensorfold.service || die "spark-tensorfold.service failed; see: journalctl --user -u spark-tensorfold.service -n 80"
+  systemctl --user start spark-tensorfold-watchdog.service 2>/dev/null
+  if answers "$TF_URL"; then
+    log "tensorfold is serving $TF_URL"
+  else
+    log "warning: unit is up but $TF_URL does not answer yet"
+  fi
+fi
+log "done: stack=$(read_stack)"

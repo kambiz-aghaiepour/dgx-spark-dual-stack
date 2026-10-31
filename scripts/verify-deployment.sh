@@ -47,7 +47,9 @@ echo "-- deployed scripts"
 for s in vllm-model-select.py vllm-model-set spark-vllm-watchdog \
          spark-vllm-podman-start-select spark-vllm-podman-start \
          spark-vllm-podman-stop spark-vllm-podman-health \
-         spark-vllm-evict-cache.py vllm-model-add.py miaai_launch.sh; do
+         spark-vllm-evict-cache.py vllm-model-add.py miaai_launch.sh \
+         spark-stack-switch spark-tensorfold-start spark-tensorfold-stop \
+         spark-tensorfold-health spark-tensorfold-watchdog; do
   check_file "$HERE/scripts/$s" "$BIN/$s"
 done
 check_file "$HERE/scripts/spark-vllm-warmup.sh" "$HOME/spark-vllm-warmup.sh"
@@ -60,7 +62,8 @@ done
 
 echo
 echo "-- systemd user units"
-for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service; do
+for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service \
+         spark-tensorfold.service spark-tensorfold-watchdog.service; do
   check_file "$HERE/systemd/$u" "$UNITS/$u"
 done
 check_file "$HERE/systemd/override.conf" "$UNITS/spark-vllm-podman.service.d/override.conf"
@@ -102,13 +105,27 @@ fi
 
 echo
 echo "-- systemd user units enabled"
-for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service; do
+for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service \
+         spark-tensorfold.service spark-tensorfold-watchdog.service; do
   if systemctl --user is-enabled "$u" >/dev/null 2>&1; then
     ok "$u enabled"
   else
     bad "$u not enabled"
   fi
 done
+
+echo
+echo "-- stack assignment (vllm or tensorfold)"
+if [ -f "$CFG/stack.conf" ]; then
+  ok "stack.conf: STACK=$(sed -n 's/^STACK=//p' "$CFG/stack.conf" | head -1) TF_PROFILE=$(sed -n 's/^TF_PROFILE=//p' "$CFG/stack.conf" | head -1)"
+else
+  note "no $CFG/stack.conf (means vllm); deploy.sh ships the switcher, spark-stack-switch writes it"
+fi
+if [ -x "$BIN/spark-stack-switch" ]; then
+  ok "spark-stack-switch present"
+else
+  bad "spark-stack-switch missing"
+fi
 
 echo
 echo "-- runtime state (not repo artifacts)"

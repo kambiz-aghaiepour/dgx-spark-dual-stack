@@ -1,0 +1,18 @@
+[Unit]
+Description=Spark TensorFold EXL3 cluster (DeepSeek-V4.1, TP=2, port 8888)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/kambiz/dgx-spark-dual-stack
+Environment=SPARK_TENSORFOLD_REPO_DIR=/home/kambiz/dgx-spark-dual-stack
+TimeoutStartSec=2400
+TimeoutStopSec=300
+ExecStart=/home/kambiz/.local/bin/spark-tensorfold-start
+ExecStartPost=/home/kambiz/.local/bin/spark-tensorfold-health
+ExecStop=/home/kambiz/.local/bin/spark-tensorfold-stop
+
+[Install]
+WantedBy=default.target

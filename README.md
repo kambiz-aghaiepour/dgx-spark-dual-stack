@@ -140,6 +140,12 @@ pack). `dealign-direct` is verified on the pair: 5/5 API checks, 51 tok/s decode
 131072 context, 103 GiB per node. Setup, space, memory, the BF16 engine revision it
 needs and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
 
+Switching between the stacks is a row in the selector (`tensorfold:dealign-direct`, first
+row) and a CLI: `spark-stack-switch --status | tensorfold [profile] --apply | vllm`.
+`~/.config/spark-vllm/stack.conf` records the choice, and each stack has its own watchdog:
+`spark-tensorfold-watchdog.service` (idle unless stack.conf says tensorfold) next to the
+existing `spark-vllm-health.service` (idle while TensorFold owns the pair).
+
 ## Fresh install (from scratch)
 
 Full walkthrough in [docs/setup-fresh-install.md](docs/setup-fresh-install.md):

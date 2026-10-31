@@ -1,0 +1,106 @@
+#!/bin/bash
+# Spark TensorFold health watchdog (systemd user service, runs as kambiz).
+# It only acts while ~/.config/spark-vllm/stack.conf says STACK=tensorfold, so it can stay
+# enabled next to spark-vllm-health: whichever stack is switched in has its own guard, and the
+# other one idles. A stack that answers but was started outside systemd (a manual
+# tensorfold-model.sh start) is left alone until it really stops answering.
+#
+#   spark-tensorfold-watchdog            loop (used by the unit)
+#   spark-tensorfold-watchdog check      one probe round; exit 0 healthy, 1 not
+#
+# Knobs (env, else ~/.config/spark-tensorfold-watchdog.conf, else defaults):
+#   SPARK_TF_WATCHDOG_FAILURE_LIMIT  consecutive probe failures before a restart (10)
+#   SPARK_TF_WATCHDOG_PROBE_TIMEOUT  per-probe curl timeout in seconds (120)
+set -uo pipefail
+
+CONF="${SPARK_TF_WATCHDOG_CONF:-$HOME/.config/spark-tensorfold-watchdog.conf}"
+[ -f "$CONF" ] && . "$CONF"
+FAILURE_LIMIT="${SPARK_TF_WATCHDOG_FAILURE_LIMIT:-${FAILURE_LIMIT:-10}}"
+PROBE_TIMEOUT="${SPARK_TF_WATCHDOG_PROBE_TIMEOUT:-${PROBE_TIMEOUT:-120}}"
+printf '%s' "$FAILURE_LIMIT" | grep -qE '^[0-9]+$' || { echo "WATCHDOG: invalid FAILURE_LIMIT, using 10"; FAILURE_LIMIT=10; }
+printf '%s' "$PROBE_TIMEOUT" | grep -qE '^[0-9]+$' || { echo "WATCHDOG: invalid PROBE_TIMEOUT, using 120"; PROBE_TIMEOUT=120; }
+
+SVC=spark-tensorfold
+BASE="http://localhost:${SPARK_TENSORFOLD_PORT:-8888}"
+FLAG="$HOME/.spark-vllm-maintenance"
+STACK_CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+PROFILE_DIR="${SPARK_TENSORFOLD_CONF:-$HOME/.config/spark-vllm/tensorfold}/profiles"
+
+stack() {
+  local s=""
+  [ -f "$STACK_CONF" ] && s=$(sed -n 's/^STACK=//p' "$STACK_CONF" | head -1)
+  case "$s" in tensorfold) echo tensorfold ;; *) echo vllm ;; esac
+}
+served_name() {
+  local p f
+  p=$(sed -n 's/^TF_PROFILE=//p' "$STACK_CONF" 2>/dev/null | head -1)
+  f="$PROFILE_DIR/${p:-dealign-direct}.env"
+  [ -f "$f" ] && sed -n 's/^SERVED_NAME=//p' "$f" | head -1
+}
+
+probe() {
+  PROBE_REASON=
+  local code body
+  curl -fsS --max-time "$PROBE_TIMEOUT" "$BASE/v1/models" >/dev/null 2>&1 || { PROBE_REASON=models; return 1; }
+  body="{\"model\":\"$(served_name)\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi.\"}],\"max_tokens\":1}"
+  code=$(curl -s --max-time "$PROBE_TIMEOUT" -o /tmp/spark-tf-probe.json -w "%{http_code}" \
+    -H "Content-Type: application/json" -d "$body" "$BASE/v1/chat/completions") || { PROBE_REASON="completion(timeout/cxn)"; return 1; }
+  [ "$code" = "200" ] || { PROBE_REASON="completion(http $code)"; return 1; }
+  python3 -c "import json;json.load(open('/tmp/spark-tf-probe.json'))" 2>/dev/null || { PROBE_REASON="completion(unparsable)"; return 1; }
+  return 0
+}
+state() { systemctl --user show -p ActiveState --value "$SVC" 2>/dev/null; }
+
+restart_cycle() {
+  echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC unhealthy -> stop, reset-failed, start"
+  systemctl --user stop "$SVC" 2>/dev/null
+  systemctl --user reset-failed "$SVC" 2>/dev/null
+  if systemctl --user start "$SVC"; then
+    echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC started (it gates on /v1/models itself)"
+    return 0
+  fi
+  echo "[$(date +%H:%M:%S)] WATCHDOG: $SVC start failed"
+  return 1
+}
+
+if [ "${1:-}" = "check" ]; then
+  if [ "$(stack)" != tensorfold ]; then echo "IDLE (stack=$(stack))"; exit 0; fi
+  if probe; then echo "HEALTHY"; exit 0; else echo "UNHEALTHY (state=$(state), reason=$PROBE_REASON)"; exit 1; fi
+fi
+
+echo "[$(date +%H:%M:%S)] WATCHDOG: started (failure_limit=$FAILURE_LIMIT, probe_timeout=${PROBE_TIMEOUT}s, api=$BASE)"
+failures=0; attempts=0; idle_logged=0
+while true; do
+  if [ -f "$FLAG" ]; then sleep 60; continue; fi
+  if [ "$(stack)" != tensorfold ]; then
+    [ "$idle_logged" = 1 ] || { echo "[$(date +%H:%M:%S)] WATCHDOG: idle (stack=$(stack))"; idle_logged=1; }
+    failures=0; sleep 60; continue
+  fi
+  idle_logged=0
+  s=$(state)
+  case "$s" in
+    activating|reloading) sleep 60 ;;
+    active)
+      if probe; then failures=0; sleep 60; else
+        failures=$((failures + 1))
+        echo "[$(date +%H:%M:%S)] WATCHDOG: probe failure $failures/$FAILURE_LIMIT (reason=$PROBE_REASON)"
+        if [ "$failures" -ge "$FAILURE_LIMIT" ]; then
+          failures=0
+          restart_cycle || true
+          attempts=$((attempts + 1))
+          [ "$attempts" -ge 3 ] && sleep 600
+        fi
+        sleep 30
+      fi ;;
+    failed|inactive)
+      # A hand-started stack (tensorfold-model.sh start) has no unit; do not fight it.
+      if probe; then
+        echo "[$(date +%H:%M:%S)] WATCHDOG: unit is $s but the API answers - started outside systemd, leaving it alone"
+        sleep 300
+      else
+        restart_cycle || true
+        sleep 300
+      fi ;;
+    *) echo "[$(date +%H:%M:%S)] WATCHDOG: unknown state '$s'"; sleep 60 ;;
+  esac
+done

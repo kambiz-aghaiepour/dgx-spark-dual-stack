@@ -1,0 +1,12 @@
+[Unit]
+Description=Spark TensorFold health watchdog (acts only while stack.conf says tensorfold)
+After=spark-tensorfold.service
+
+[Service]
+Type=simple
+ExecStart=/home/kambiz/.local/bin/spark-tensorfold-watchdog
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

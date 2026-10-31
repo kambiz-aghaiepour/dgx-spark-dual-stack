@@ -68,8 +68,14 @@ fi
 echo "[$(date +%H:%M:%S)] WATCHDOG: started (failure_limit=$FAILURE_LIMIT, probe_timeout=${PROBE_TIMEOUT}s)"
 attempts=0
 failures=0
+STACK_CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+stack_owner() { sed -n 's/^STACK=//p' "$STACK_CONF" 2>/dev/null | head -1; }
 while true; do
   if [ -f "$FLAG" ]; then
+    sleep 60; continue
+  fi
+  # TensorFold owns the pair while stack.conf says so: this stack's absence is not a failure.
+  if [ "$(stack_owner)" = tensorfold ]; then
     sleep 60; continue
   fi
   s=$(state)

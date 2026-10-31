@@ -27,10 +27,39 @@ CONF = os.path.expanduser("~/.config/spark-vllm/model.conf")
 HUB = os.path.expanduser("~/.cache/huggingface/hub")
 WORKER = "gx10-02"
 PATH_SETTER = os.path.expanduser("~/.local/bin/vllm-model-set")
+STACK_CONF = os.path.expanduser("~/.config/spark-vllm/stack.conf")
+STACK_SWITCH = os.path.expanduser("~/.local/bin/spark-stack-switch")
+TF_URL = os.environ.get("SPARK_TENSORFOLD_ENGINE_URL", "http://127.0.0.1:8888")
+TF_PROFILE_DEFAULT = "dealign-direct"
 LOCKS = os.path.expanduser("~/.config/spark-vllm/locked.conf")
 FLAGS_DIR = os.path.expanduser("~/.config/spark-vllm/flags")
 ARCHIVER = os.path.expanduser("~/.local/bin/vllm-model-archive.py")
 ARCHIVE_LOG = os.path.expanduser("~/.config/spark-vllm/archive.log")
+
+
+def read_stack():
+    """Which stack the pair runs, from stack.conf; a missing file means vllm."""
+    d = {}
+    try:
+        with open(STACK_CONF) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    d[k.strip()] = v.strip()
+    except OSError:
+        pass
+    d.setdefault("STACK", "vllm")
+    d.setdefault("TF_PROFILE", TF_PROFILE_DEFAULT)
+    return d
+
+
+def tf_serving():
+    try:
+        with urllib.request.urlopen(TF_URL + "/v1/models", timeout=3) as r:
+            return getattr(r, "status", 200) == 200
+    except Exception:
+        return False
 
 
 def human(n):
@@ -302,7 +331,7 @@ class Selector:
     def __init__(self):
         self.conf = read_conf()
         self.arch = archive_list()
-        self.models = self.arch.get("models", [])
+        self.models = [self.tf_row()] + self.arch.get("models", [])
         self.pending = self.conf.get("MODEL_ID", "")
         self.alias = self.conf.get("SERVED_MODEL_NAME", "")
         self.msg = ""
@@ -324,6 +353,13 @@ class Selector:
         self.body = urwid.ListBox(urwid.SimpleListWalker([]))
         self.footer = urwid.Text("", wrap="clip")
         self.refresh()
+
+    def tf_row(self):
+        st = read_stack()
+        prof = st.get("TF_PROFILE") or TF_PROFILE_DEFAULT
+        return {"id": f"tensorfold:{prof}", "tf": True, "profile": prof,
+                "engine": "tf", "state": "stack", "cached": True, "nodes": {},
+                "serving": tf_serving(), "current": st.get("STACK") == "tensorfold"}
 
     def row_for(self, mid):
         for m in self.models:
@@ -351,15 +387,20 @@ class Selector:
         order = node_order(self.arch)
         for m in self.models:
             mark = ">" if m["id"] == self.pending else " "
-            curm = "*" if m["id"] == cur else " "
+            is_cur = (m.get("current") if m.get("tf") else m["id"] == cur)
+            curm = "*" if is_cur else " "
             locked = " [LOCKED]" if m["id"] in locks() else ""
             archived = not m.get("cached")
             per = m.get("nodes") or {}
             sizes = " ".join(f"{human((per.get(n) or {}).get('bytes') or 0):>9}" for n in order)
-            state = "ARCHIVED" if archived else ("PARTIAL" if m.get("state") == "partial" else "cached")
+            if m.get("tf"):
+                sizes = " " * max(9 * max(1, len(order)) + max(0, len(order) - 1), 9)
+                state = "running" if m.get("serving") else "stopped"
+            else:
+                state = "ARCHIVED" if archived else ("PARTIAL" if m.get("state") == "partial" else "cached")
             text = (f"{curm}{mark} {m['id']:<40} {m['engine']:<5} {state:<8} {sizes}"
-                    f"{'  CURR' if m['id'] == cur else ''}"
-                    f"{'  LIVE' if m.get('serving') else ''}{locked}")
+                    f"{'  CURR' if is_cur else ''}"
+                    f"{'  LIVE' if m.get('serving') else ''}{'  STACK' if m.get('tf') and is_cur else ''}{locked}")
             attr = "arch" if archived else ("cur" if m["id"] == self.pending else "body")
             rows.append(urwid.AttrMap(PickRow(text, self, m["id"]), attr,
                                       "archsel" if archived else "sel"))
@@ -375,12 +416,28 @@ class Selector:
     def reload(self):
         self.conf = read_conf()
         self.arch = archive_list()
-        self.models = self.arch.get("models", [])
+        self.models = [self.tf_row()] + self.arch.get("models", [])
         if self.pending and not self.row_for(self.pending).get("cached"):
             self.pending = ""
         self.refresh()
 
     def switch_status(self):
+        if read_stack().get("STACK") == "tensorfold":
+            try:
+                tf = subprocess.run(
+                    ["systemctl", "--user", "show", "-p", "ActiveState", "--value",
+                     "spark-tensorfold.service"],
+                    capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:
+                return ""
+            if tf == "active":
+                return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
+                        f"(port 8888, separate stack)")
+            if tf in ("activating", "reloading"):
+                return "\u26a0 SWITCH IN PROGRESS -> TensorFold (stack starting)"
+            if tf == "failed":
+                return "\u26a0 FAILED: spark-tensorfold - journalctl --user -u spark-tensorfold.service"
+            return f"TensorFold: {tf}"
         try:
             st = subprocess.run(
                 ["systemctl", "--user", "show", "-p", "ActiveState", "--value",
@@ -439,8 +496,14 @@ class Selector:
         return urwid.AttrMap(self.head, "head")
 
     def apply_now(self):
-        self.exec_apply = [PATH_SETTER, self.pending,
-                           self.alias or self.pending, "--apply"]
+        row = self.row_for(self.pending)
+        if row.get("tf"):
+            # switching stacks: stop vLLM (and its watchdog), start TensorFold and its own
+            self.exec_apply = [STACK_SWITCH, "tensorfold",
+                               row.get("profile") or TF_PROFILE_DEFAULT, "--apply"]
+        else:
+            self.exec_apply = [PATH_SETTER, self.pending,
+                               self.alias or self.pending, "--apply"]
         raise urwid.ExitMainLoop()
 
     def start_archive(self):
@@ -452,6 +515,10 @@ class Selector:
         if not row:
             return True
         mid = row["id"]
+        if row.get("tf"):
+            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to archive"
+            self.refresh()
+            return True
         if not row.get("cached"):
             self.msg = f"{mid} is already archived"
             self.refresh()
@@ -504,6 +571,10 @@ class Selector:
         if not row:
             return True
         mid = row["id"]
+        if row.get("tf"):
+            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to unarchive"
+            self.refresh()
+            return True
         if not row.get("archived"):
             self.msg = f"{mid} is not archived - nothing to pull back"
             self.refresh()
@@ -724,7 +795,7 @@ class Selector:
             return True
         if key in ("r", "R"):
             self.conf = read_conf()
-            self.models = scan_models()
+            self.models = [self.tf_row()] + scan_models()
             self.msg = "refreshed"
             self.refresh()
             return True
@@ -793,6 +864,10 @@ class Selector:
         if key in ("l", "L"):
             if self.models:
                 mid = self.models[self.body.focus_position]["id"]
+                if self.row_for(mid).get("tf"):
+                    self.msg = "tensorfold is a stack, not a checkpoint - nothing to lock"
+                    self.refresh()
+                    return True
                 was = mid in locks()
                 set_lock(mid, not was)
                 self.msg = f"{'locked' if not was else 'unlocked'} {mid}"
@@ -801,6 +876,10 @@ class Selector:
         if key in ("d", "D"):
             if self.models:
                 mid = self.models[self.body.focus_position]["id"]
+                if self.row_for(mid).get("tf"):
+                    self.msg = "tensorfold is a stack, not a checkpoint - nothing to delete"
+                    self.refresh()
+                    return True
                 row0 = self.row_for(mid)
                 if row0.get("active", mid == self.conf.get("MODEL_ID", "")):
                     self.msg = (f"REFUSED: {mid} is the current model - "
@@ -885,6 +964,17 @@ def run_status():
     print(f"model.conf:   {conf.get('MODEL_ID', '?')} as "
           f"{conf.get('SERVED_MODEL_NAME', '?')}")
     print(f"service:      {unit} | watchdog: {wd}")
+    stk = read_stack()
+    print(f"stack:        {stk['STACK']} (profile {stk['TF_PROFILE']}) | tensorfold: "
+          f"{sh('systemctl', '--user', 'show', '-p', 'ActiveState', '--value', 'spark-tensorfold.service')}"
+          f" | tf watchdog: {sh('systemctl', '--user', 'is-active', 'spark-tensorfold-watchdog.service')}")
+    if stk["STACK"] == "tensorfold":
+        try:
+            with urllib.request.urlopen(urllib.request.Request(TF_URL + "/v1/models"),
+                                        timeout=4) as r:
+                engine = json.load(r)["data"][0]["id"] + " (port 8888)"
+        except Exception:
+            engine = "(not answering on 8888)"
     if unit == "activating" or applying:
         print(f"switch:       IN PROGRESS -> {conf.get('MODEL_ID', '?')}")
     elif unit == "active":

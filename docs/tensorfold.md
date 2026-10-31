@@ -93,6 +93,36 @@ Two things cost time and are worth knowing:
    unmerged, its head has not passed GPU qualification, and the saved checks do not prove
    every request fits in memory. Treat it as lab work until that lands.
 
+## Switching stacks
+
+`~/.config/spark-vllm/stack.conf` says which stack owns the pair (`STACK=vllm|tensorfold`,
+`TF_PROFILE=…`); a missing file means vllm. Both selectors and both watchdogs read it, so
+the two stacks never fight over the memory.
+
+```bash
+spark-stack-switch --status                  # what is written down vs what answers on 8000/8888
+spark-stack-switch tensorfold --apply        # stop vLLM (+ its watchdog), start TensorFold (+ its watchdog)
+spark-stack-switch vllm                      # stop TensorFold and its watchdog; vLLM starts on its own
+```
+
+In `vllm-model-select` the stack is a row of its own, always first:
+`tensorfold:dealign-direct  tf  running/stopped`. Enter picks it, `A` (or `s`) applies it —
+exactly like a model row, except applying it runs the switcher instead of `vllm-model-set`.
+Archive, unarchive, lock and delete refuse on that row: the weights live in `~/models`, not
+in the HF cache, so there is nothing there to move or delete. Choosing a vLLM model while
+TensorFold runs makes `vllm-model-set` stop TensorFold first.
+
+Units (installed by `deploy.sh`, enabled, never started by it):
+
+- `spark-tensorfold.service` — oneshot + `RemainAfterExit`; ExecStart is a no-op unless
+  `stack.conf` says tensorfold, which is what makes it safe to enable at boot.
+- `spark-tensorfold-watchdog.service` — probes `/v1/models` and a 1-token completion on 8888,
+  restarts the unit after 10 consecutive failures, and idles whenever `stack.conf` says vllm.
+  A stack started by hand (without the unit) is left alone while it still answers.
+
+`spark-vllm-watchdog` gained the mirror-image guard: while `stack.conf` says tensorfold it
+sleeps instead of trying to restart a stack that is supposed to be down.
+
 ## Interaction with the rest of the repo
 
 - `vllm-model-select` / `vllm-model-archive` only know `~/.cache/huggingface/hub`, so these

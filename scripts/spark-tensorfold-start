@@ -1,0 +1,18 @@
+#!/bin/bash
+# Start the TensorFold stack for the systemd user unit (ExecStart).
+# The recipe launcher does the work; this wrapper only locates it and the profile.
+set -euo pipefail
+REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
+CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+PROFILE="${SPARK_TENSORFOLD_PROFILE:-}"
+if [ -z "$PROFILE" ] && [ -f "$CONF" ]; then
+  PROFILE=$(sed -n 's/^TF_PROFILE=//p' "$CONF" | head -1)
+fi
+[ -n "$PROFILE" ] || PROFILE=dealign-direct
+STACK=""
+[ -f "$CONF" ] && STACK=$(sed -n 's/^STACK=//p' "$CONF" | head -1)
+if [ "$STACK" != tensorfold ]; then
+  echo "spark-tensorfold-start: stack.conf says '${STACK:-vllm}', not tensorfold - nothing to do"
+  exit 0
+fi
+exec "$REPO/scripts/tensorfold-model.sh" start "$PROFILE"

@@ -44,6 +44,9 @@ install -m 0755 "$HERE"/scripts/vllm-model-archive.py "$HOME/.local/bin/"
 # and the name the docs / ssh one-liners use
 install -m 0755 "$HERE"/scripts/vllm-model-archive "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-evict-cache.py "$HOME/.local/bin/"
+# second stack: the switcher plus the TensorFold unit's start/stop/health/watchdog wrappers
+install -m 0755 "$HERE"/scripts/{spark-stack-switch,spark-tensorfold-start,spark-tensorfold-stop,spark-tensorfold-health,spark-tensorfold-watchdog} \
+  "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-warmup.sh "$HOME/"
 
 # vllm-model-select is a wrapper around the .py (system python has no urwid).
@@ -92,11 +95,18 @@ mkdir -p "$HOME/.config/systemd/user/spark-vllm-podman.service.d"
 install -m 0644 "$HERE"/systemd/spark-vllm-podman.service "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/spark-vllm-health.service "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/spark-vllm-warmup.service "$HOME/.config/systemd/user/"
+install -m 0644 "$HERE"/systemd/{spark-tensorfold.service,spark-tensorfold-watchdog.service} "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/{node-exporter,nvidia-gpu-exporter}.service "$HOME/.config/systemd/user/"
 install -m 0644 "$HERE"/systemd/override.conf "$HOME/.config/systemd/user/spark-vllm-podman.service.d/"
 systemctl --user daemon-reload
 echo "    start-select dispatch wired via override.conf (head only)"
 echo "    warmup service packaged; optional exporters: systemctl --user enable --now node-exporter nvidia-gpu-exporter"
+# The TensorFold units ship disabled: they only run while stack.conf says tensorfold, and
+# spark-stack-switch enables/starts them on the switch. Enabling them here would start the
+# second stack at boot beside vLLM.
+systemctl --user enable spark-tensorfold.service spark-tensorfold-watchdog.service >/dev/null 2>&1 || true
+echo "    tensorfold units packaged and enabled (both no-op unless stack.conf says tensorfold)"
+echo "    switch stacks with: spark-stack-switch tensorfold --apply   (back: spark-stack-switch vllm)"
 
 if [ "$ALL" = 1 ]; then
   echo "==> syncing scripts to worker ($HOST_ALIAS)"

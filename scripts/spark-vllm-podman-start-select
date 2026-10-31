@@ -18,6 +18,13 @@ ENVS="${FLAGS_FILE%.conf}.env"
 # Qwen3.8-Flash-Next-NVFP4 -> model-native stock-vLLM engine (MiaAI runbook,
 # podman-adapted) via miaai_launch.sh; anything else -> the DeepSeek/b12x
 # launch-cluster path below (byte-identical to before).
+# Refuse to start while stack.conf assigns the pair to TensorFold: it holds ~100 GiB per node.
+STACKF="$HOME/.config/spark-vllm/stack.conf"
+if [ "$(sed -n 's/^STACK=//p' "$STACKF" 2>/dev/null | head -1)" = tensorfold ]; then
+  echo "stack.conf says STACK=tensorfold: run spark-stack-switch vllm before starting this unit" >&2
+  exit 1
+fi
+
 case "$MODEL_ID" in
   *Qwen3.8-Flash-Next-NVFP4*) exec "$HOME/.local/bin/miaai_launch.sh" ;;
 esac
