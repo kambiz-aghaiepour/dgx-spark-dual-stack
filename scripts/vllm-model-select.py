@@ -306,7 +306,8 @@ def run_list():
         if not m.get("cached"):
             flags.append("archived - unarchive to use")
         print(f"{m['id']:<44} {m['engine']:<5} {m['state']:<9} {sizes}  {' '.join(flags)}")
-    print(f"\ncurrent: {cur} -> {conf.get('SERVED_MODEL_NAME', '')}")
+    print(f"\ncurrent: {default}"
+          + (f" -> {conf.get('SERVED_MODEL_NAME', '')}" if cur else ""))
     for n in order:
         info = (res.get("nodes") or {}).get(n) or {}
         if info and not info.get("ok", True):
