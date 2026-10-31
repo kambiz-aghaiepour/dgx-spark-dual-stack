@@ -46,6 +46,7 @@ mesh — see [docs/setup-fresh-install.md](docs/setup-fresh-install.md).
 scripts/            deployment + switching + supervision scripts (see below)
 config/model.conf.template
 config/flags/       per-model flags files (vLLM serve args) + per-model .env
+config/tensorfold/  profiles for the separate TensorFold stack (DSv4.1)
 systemd/            user units (podman/health/warmup, optional exporters)
                     + the override.conf that wires start-select
 docs/               fresh-install, architecture notes, benchmarking,
@@ -119,6 +120,23 @@ that is active — the `model.conf` boot default or whatever the engine is servi
 — cannot be archived at all: the tool refuses and tells you to switch to another
 model/engine first. Setup (mkfs/fstab/ownership), the on-disk layout and the
 exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
+
+## Second stack: TensorFold (DeepSeek-V4.1-Flash, EXL3)
+
+A separate engine stack for the EXL3 packs, run instead of vLLM and never beside it
+(one server at a time fits in 121 GiB/node). Port 8888, exllamav3-derived engine,
+podman instead of docker:
+
+```bash
+cp config/tensorfold/cluster.env.example ~/.config/spark-vllm/tensorfold/cluster.env
+./scripts/tensorfold-engine.sh build dealign-direct   # engine image on both nodes
+./scripts/tensorfold-model.sh  fetch dealign-direct   # ~416 GB, view + worker copy
+./scripts/tensorfold-model.sh  start dealign-direct
+./scripts/tensorfold-model.sh  verify dealign-direct
+```
+
+Profiles: `dealign-direct` (the abliterated EXL3 2.9 bpw bundle) and `base` (LibertAI
+pack). Setup, space, memory and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
 
 ## Fresh install (from scratch)
 
