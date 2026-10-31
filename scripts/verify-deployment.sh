@@ -125,6 +125,12 @@ fi
 
 echo
 echo "-- archive tool"
+if grep -qx 'NODE=head' "$HOME/.config/spark-vllm/node.conf" 2>/dev/null; then
+  ok "node.conf says NODE=head"
+else
+  note "node.conf missing or not NODE=head (deploy.sh writes it; the archive helper needs it to know which node it is)"
+fi
+
 if [ -e "$BIN/vllm-model-archive.py" ]; then
   check_file "$HERE/scripts/vllm-model-archive.py" "$BIN/vllm-model-archive.py"
   check_file "$HERE/scripts/vllm-model-archive" "$BIN/vllm-model-archive"

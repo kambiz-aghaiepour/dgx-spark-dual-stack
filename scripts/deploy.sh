@@ -62,6 +62,10 @@ else
   echo "    keeping existing model.conf (runtime state; --force-config replaces it)"
 fi
 install -m 0644 "$HERE"/config/flags/* "$HOME/.config/spark-vllm/flags/"
+# which node this is, so a helper run locally (the worker over ssh) does not
+# mistake itself for the head and fail to "reach" the worker
+printf 'NODE=%s\n' "${SPARK_VLLM_NODE_ROLE:-head}" > "$HOME/.config/spark-vllm/node.conf"
+chmod 0644 "$HOME/.config/spark-vllm/node.conf"
 
 if [ "$SKIP_MODS" = 1 ]; then
   echo "==> skipping launcher mods (--skip-mods); start will fail unless they are present"
@@ -102,6 +106,7 @@ if [ "$ALL" = 1 ]; then
   # ARCHIVE_PATH, so the worker gets the helper too (configure it there).
   scp -q "$HERE"/scripts/{vllm-model-archive.py,vllm-model-archive} "$HOST_ALIAS":~/.local/bin/ 2>/dev/null || true
   ssh -o BatchMode=yes "$HOST_ALIAS" 'chmod 755 ~/.local/bin/vllm-model-archive.py ~/.local/bin/vllm-model-archive' 2>/dev/null || true
+  ssh -o BatchMode=yes "$HOST_ALIAS" 'mkdir -p ~/.config/spark-vllm && printf "NODE=worker\n" > ~/.config/spark-vllm/node.conf && chmod 0644 ~/.config/spark-vllm/node.conf' 2>/dev/null || true
   echo "    (worker only needs runtime helpers; full launch is driven from head)"
   echo "    (worker archive: ssh $HOST_ALIAS vllm-model-archive --set-path /archive)"
 fi

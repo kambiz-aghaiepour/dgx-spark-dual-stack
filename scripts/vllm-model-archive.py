@@ -104,7 +104,30 @@ def boot_model():
 # ---------------------------------------------------------------------- nodes
 
 NODE_ORDER = os.environ.get("SPARK_VLLM_NODES", "head,worker")
-LOCAL_NODE = os.environ.get("SPARK_VLLM_NODE", "head")
+
+
+def configured_node_name():
+    """Which node this is: the env for one command, else node.conf from deploy.
+
+    Without this a helper run on the worker (ssh gx10-02 vllm-model-archive ...)
+    calls itself "head", tries to reach the worker over ssh, and reports the
+    node as unusable - the numbers look like a broken worker, not a wrong name.
+    """
+    env = os.environ.get("SPARK_VLLM_NODE", "").strip()
+    if env in ("head", "worker"):
+        return env
+    try:
+        with open(os.path.expanduser("~/.config/spark-vllm/node.conf")) as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k.strip() == "NODE" and v.strip() in ("head", "worker"):
+                    return v.strip()
+    except OSError:
+        pass
+    return "head"
+
+
+LOCAL_NODE = configured_node_name()
 WORKER_HOST = os.environ.get("WORKER", "gx10-02")
 HELPER = os.environ.get("SPARK_VLLM_ARCHIVE_HELPER", "~/.local/bin/vllm-model-archive.py")
 REMOTE_CMD = os.environ.get(
@@ -1261,7 +1284,16 @@ def dispatch(argv):
     a = build_parser().parse_args(list(argv))
     if a.self_node:
         set_local_node(a.self_node)
-    scope = LOCAL_NODE if a.local else (a.node or "all")
+    if a.local:
+        scope = LOCAL_NODE
+    elif a.node:
+        scope = a.node
+    elif LOCAL_NODE != "head" and (a.status or a.list):
+        # on the worker, plain --status/--list mean "this node": the head is the
+        # orchestrator, and a worker has no ssh route to itself
+        scope = LOCAL_NODE
+    else:
+        scope = "all"
     try:
         if a.set_path:
             if a.local or a.node is None:

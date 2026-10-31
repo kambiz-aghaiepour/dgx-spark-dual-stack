@@ -131,6 +131,16 @@ def main():
     check("status says the mount is available but off",
           "/dev/shm mounted here" in r.stdout, r.stdout.strip())
 
+    # --- node.conf tells a helper on the worker which node it is
+    with open(os.path.join(WORK_HOME, ".config/spark-vllm/node.conf"), "w") as f:
+        f.write("NODE=worker\n")
+    env = env_for(WORK_HOME, cluster=False)
+    env.pop("SPARK_VLLM_NODE", None)
+    r = subprocess.run([sys.executable, HELPER, "--status", "--local", "--json"],
+                       capture_output=True, text=True, env=env)
+    check("node.conf names the node it runs on",
+          json.loads(r.stdout or "{}").get("local_node") == "worker", r.stdout.strip()[:160])
+
     # --- per-node configuration
     rc, res = jrun("--set-path", WORK_ARCH, "--node", "worker")
     check("set-path on the worker from the head",

@@ -88,6 +88,10 @@ runs it over ssh). `--set-path --node worker` fails loudly, naming the node, if
 the directory is missing, not writable, or on the same filesystem as that
 node's cache.
 
+`deploy.sh` also writes `~/.config/spark-vllm/node.conf` (`NODE=head` here,
+`NODE=worker` on the worker) so a helper started on the worker knows it is the
+worker; without that it calls itself head and "fails to reach" itself.
+
 Each node writes its own `~/.config/spark-vllm/archive.conf`:
 
 ```
