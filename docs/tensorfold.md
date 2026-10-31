@@ -64,6 +64,23 @@ and the recipe's own GPU guard refuses while any GPU container runs in either po
 `~/models` is on the internal NVMe. Do **not** put these weights on `/archive`: the engine
 re-reads the Engram tables during prefill and the archive disk is a USB HDD.
 
+## What was verified on the pair (2026-10-31)
+
+`dealign-direct` with engine `6c53993796ef`: weights loaded in 273 s (head) / 355 s (worker),
+103 GiB reserved per node, context 131072, 4 streams, DSpark 5 drafts, API on 8888.
+`verify` 5/5 (plain, thinking, strict json_schema, tool_choice, regex). Decode measured
+51.2 tok/s on a 123-token answer (the recipe's published figure is 57).
+
+Two things cost time and are worth knowing:
+
+- **The base engine revision cannot load this pack.** It demands `layers.N.attn.wo_b.trellis`;
+  the bundle keeps those matrices in BF16 (`…wo_b.weight`), so the first start stopped with
+  `KeyError: 'layers.10.attn.wo_b.trellis'` after the preflight passed. Revision `6c53993796ef`
+  has the BF16 path (`is_bf16_only`), which is why the profile pins it. That revision is
+  TensorFold PR #8, still unmerged upstream.
+- **The health unit restarts vLLM.** `spark-vllm-health.service` brings `spark-vllm-podman`
+  back within a minute of a stop, so taking the pair means stopping the health unit first.
+
 ## Which profile to try
 
 1. **`dealign-direct`** — the abliterated bundle with the engine revision that is reported
@@ -83,4 +100,5 @@ re-reads the Engram tables during prefill and the archive disk is a USB HDD.
 - `deploy.sh` does not install these launchers: they are run from this checkout, because they
   resolve `config/tensorfold/` relative to the repo.
 - To go back to the vLLM stack: `./scripts/tensorfold-model.sh stop`, then
-  `systemctl --user start spark-vllm-podman`.
+  `systemctl --user start spark-vllm-podman && systemctl --user start spark-vllm-health`
+  (the health unit stays stopped while TensorFold runs, otherwise it restarts vLLM).

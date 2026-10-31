@@ -136,7 +136,9 @@ cp config/tensorfold/cluster.env.example ~/.config/spark-vllm/tensorfold/cluster
 ```
 
 Profiles: `dealign-direct` (the abliterated EXL3 2.9 bpw bundle) and `base` (LibertAI
-pack). Setup, space, memory and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
+pack). `dealign-direct` is verified on the pair: 5/5 API checks, 51 tok/s decode,
+131072 context, 103 GiB per node. Setup, space, memory, the BF16 engine revision it
+needs and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
 
 ## Fresh install (from scratch)
 
