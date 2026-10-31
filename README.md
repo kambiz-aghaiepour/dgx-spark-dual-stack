@@ -1,16 +1,17 @@
 # DGX Spark Dual-Stack Deployment
 
 Two-node NVIDIA DGX Spark cluster (ASUS Ascent GX10, GB10 Superchip, 128 GB
-unified memory each) running **two alternative inference stacks** behind one
+unified memory each) running **multiple alternative inference stacks** behind one
 switch surface, plus the watchdog/supervision that keeps it serving.
 
 | Stack | Model | Engine | Measured decode (t/s) |
 |---|---|---|---|
-| **b12x** | DeepSeek-V4-Flash-Vision-Exp | `eugr/spark-vllm-docker` launcher, kernel-level b12x/MLAS build (instanttensor, MTP/B12X attention, FP8) | baseline (production default) |
-| **MiaAI-native** | nvidia/Qwen3.8-Flash-Next-NVFP4 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` stock-vLLM image + overlay patches | **45.5 mean / 68.3 peak** on this kit |
+| **TensorFold (MiaAI native-Zig)** | DeepSeek-V4.1-Flash-1017 | MiaAI-Lab TensorFold recipe, EXL3 TP=2 | **75–78** (current default) |
+| **b12x** | DeepSeek-V4-Flash-Vision-Exp | `eugr/spark-vllm-docker` launcher, kernel-level b12x/MLAS build (instanttensor, MTP/B12X attention, FP8) | baseline alternate |
+| **MiaAI-native** | nvidia/Qwen3.8-Flash-Next-NVFP4 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` stock-vLLM image + overlay patches | **45.5 mean / 68.3 peak** |
 
-One `vllm-model-set <id> --apply` switches the whole cluster; the wrapper
-dispatches each model to its own engine. Watchdog, health gate, selector,
+`spark-stack-switch` chooses the engine (`tensorfold` or `vllm`); inside vLLM,
+`vllm-model-set <id> --apply` chooses the checkpoint. Watchdog, health gate, selector,
 page-cache eviction and `--status` are stack-agnostic and unchanged.
 
 > This repo documents what was done on this cluster and ships the (scrubbed)
