@@ -1,5 +1,5 @@
 [Unit]
-Description=Spark TensorFold EXL3 cluster (DeepSeek-V4.1, TP=2, port 8888)
+Description=Spark TensorFold (MiaAI DSv4.1 native-Zig, TP=2, port 8000)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,6 +8,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/home/kambiz/dgx-spark-dual-stack
 Environment=SPARK_TENSORFOLD_REPO_DIR=/home/kambiz/dgx-spark-dual-stack
+Environment=PATH=/home/kambiz/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TimeoutStartSec=2400
 TimeoutStopSec=300
 ExecStart=/home/kambiz/.local/bin/spark-tensorfold-start

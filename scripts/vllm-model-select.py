@@ -29,8 +29,8 @@ WORKER = "gx10-02"
 PATH_SETTER = os.path.expanduser("~/.local/bin/vllm-model-set")
 STACK_CONF = os.path.expanduser("~/.config/spark-vllm/stack.conf")
 STACK_SWITCH = os.path.expanduser("~/.local/bin/spark-stack-switch")
-TF_URL = os.environ.get("SPARK_TENSORFOLD_ENGINE_URL", "http://127.0.0.1:8888")
-TF_PROFILE_DEFAULT = "dealign-direct"
+TF_URL = os.environ.get("SPARK_TENSORFOLD_ENGINE_URL", "http://127.0.0.1:8000")
+TF_PROFILE_DEFAULT = "mia-dsv41"
 LOCKS = os.path.expanduser("~/.config/spark-vllm/locked.conf")
 FLAGS_DIR = os.path.expanduser("~/.config/spark-vllm/flags")
 ARCHIVER = os.path.expanduser("~/.local/bin/vllm-model-archive.py")
@@ -135,7 +135,7 @@ def archive_list():
         return res
     # helper missing: fall back to a plain cache scan so the TUI still works
     conf = archive_call("--status")
-    boot, live = read_conf().get("MODEL_ID", ""), live_engine_id()
+    boot, live = active_vllm_model(), live_engine_id()
     rows = []
     for m in scan_models():
         cur = m["id"] == boot
@@ -201,7 +201,7 @@ def gc_orphan_blobs():
 
 
 def delete_model(mid, confirm=True):
-    cur = read_conf().get("MODEL_ID", "")
+    cur = active_vllm_model()
     if mid == cur:
         return f"REFUSED: {mid} is the currently used model - switch to another first"
     if mid in locks():
@@ -236,6 +236,18 @@ def read_conf():
     return d
 
 
+def active_vllm_model():
+    """The vLLM model that is the default right now; '' while TensorFold is the stack.
+
+    stack.conf is the engine-agnostic selection. VLLM_MODEL there is the parked
+    vLLM choice, not the default, unless STACK=vllm.
+    """
+    st = read_stack()
+    if st.get("STACK") != "vllm":
+        return ""
+    return st.get("VLLM_MODEL") or read_conf().get("MODEL_ID", "")
+
+
 def scan_models():
     """Cached repos: id, worker size ('1.2 GB' or '')."""
     models = []
@@ -263,7 +275,12 @@ def scan_models():
 def run_list():
     res = archive_list()
     conf = read_conf()
-    cur = conf.get("MODEL_ID", "")
+    cur = active_vllm_model()
+    st = read_stack()
+    default = (f"tensorfold:{st.get('TF_PROFILE') or TF_PROFILE_DEFAULT}"
+               if st.get("STACK") == "tensorfold"
+               else (cur or "(no vLLM model)"))
+    print(f"default: {default}")
     order = node_order(res)
     print(f"{'MODEL':44} {'ENGINE':5} {'STATE':9} "
           + " ".join(f"{n.upper():>9}" for n in order) + "  status")
@@ -289,7 +306,8 @@ def run_list():
         if not m.get("cached"):
             flags.append("archived - unarchive to use")
         print(f"{m['id']:<44} {m['engine']:<5} {m['state']:<9} {sizes}  {' '.join(flags)}")
-    print(f"\ncurrent: {cur} -> {conf.get('SERVED_MODEL_NAME', '')}")
+    print(f"\ncurrent: {default}"
+          + (f" -> {conf.get('SERVED_MODEL_NAME', '')}" if cur else ""))
     for n in order:
         info = (res.get("nodes") or {}).get(n) or {}
         if info and not info.get("ok", True):
@@ -390,7 +408,7 @@ class Selector:
         self.refresh()
 
     def build_rows(self):
-        cur, rows = self.conf.get("MODEL_ID", ""), []
+        cur, rows = active_vllm_model(), []
         vllm_active = read_stack().get("STACK") != "tensorfold"
         order = node_order(self.arch)
         for m in self.models:
@@ -440,10 +458,10 @@ class Selector:
                 return ""
             if tf == "active":
                 return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
-                        f"(port 8888, separate stack)")
+                        f"(port 8000, separate stack)")
             if tf == "inactive" and tf_serving():
                 return (f"serving: TensorFold {read_stack().get('TF_PROFILE')} "
-                        f"(port 8888, started outside systemd)")
+                        f"(port 8000, started outside systemd)")
             if tf in ("activating", "reloading"):
                 return "\u26a0 SWITCH IN PROGRESS -> TensorFold (stack starting)"
             if tf == "failed":
@@ -529,7 +547,7 @@ class Selector:
             return True
         mid = row["id"]
         if row.get("tf"):
-            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to archive"
+            self.msg = "tensorfold is a stack, not a checkpoint - nothing to archive"
             self.refresh()
             return True
         if not row.get("cached"):
@@ -538,7 +556,7 @@ class Selector:
             return True
         if row.get("active", row.get("current")):
             why = ("the engine is serving it right now" if row.get("serving")
-                   else "it is the boot default in model.conf")
+                   else "it is the active vLLM default")
             self.msg = (f"REFUSED: cannot archive the current model ({mid}) - "
                         f"{why}. Switch to another model/engine first (s).")
             self.refresh()
@@ -585,7 +603,7 @@ class Selector:
             return True
         mid = row["id"]
         if row.get("tf"):
-            self.msg = "tensorfold runs from ~/models, not the HF cache - nothing to unarchive"
+            self.msg = "tensorfold is a stack, not a checkpoint - nothing to unarchive"
             self.refresh()
             return True
         if not row.get("archived"):
@@ -894,7 +912,7 @@ class Selector:
                     self.refresh()
                     return True
                 row0 = self.row_for(mid)
-                if row0.get("active", mid == self.conf.get("MODEL_ID", "")):
+                if row0.get("active", mid == active_vllm_model()):
                     self.msg = (f"REFUSED: {mid} is the current model - "
                                 f"switch to another one first")
                 elif not self.row_for(mid).get("cached"):
@@ -975,9 +993,13 @@ def run_status():
         k in l for k in ("Resolved architecture", "Initializing a V1",
                          "GPU KV cache", "ERROR", "Exception"))]
     print(f"model.conf:   {conf.get('MODEL_ID', '?')} as "
-          f"{conf.get('SERVED_MODEL_NAME', '?')}")
+          f"{conf.get('SERVED_MODEL_NAME', '?')} (parked vLLM choice)")
     print(f"service:      {unit} | watchdog: {wd}")
     stk = read_stack()
+    default = (f"tensorfold:{stk.get('TF_PROFILE') or TF_PROFILE_DEFAULT}"
+               if stk.get("STACK") == "tensorfold"
+               else (stk.get("VLLM_MODEL") or conf.get("MODEL_ID", "?")))
+    print(f"default:      {default}")
     print(f"stack:        {stk['STACK']} (profile {stk['TF_PROFILE']}) | tensorfold: "
           f"{sh('systemctl', '--user', 'show', '-p', 'ActiveState', '--value', 'spark-tensorfold.service')}"
           f" | tf watchdog: {sh('systemctl', '--user', 'is-active', 'spark-tensorfold-watchdog.service')}")
@@ -985,9 +1007,9 @@ def run_status():
         try:
             with urllib.request.urlopen(urllib.request.Request(TF_URL + "/v1/models"),
                                         timeout=4) as r:
-                engine = json.load(r)["data"][0]["id"] + " (port 8888)"
+                engine = json.load(r)["data"][0]["id"] + " (port 8000)"
         except Exception:
-            engine = "(not answering on 8888)"
+            engine = "(not answering on 8000)"
     if unit == "activating" or applying:
         print(f"switch:       IN PROGRESS -> {conf.get('MODEL_ID', '?')}")
     elif unit == "active":

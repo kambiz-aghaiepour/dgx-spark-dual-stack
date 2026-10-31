@@ -105,9 +105,9 @@ def main():
 
     ids = {m["id"]: m for m in s.models}
     check("three models plus the stack row", set(ids) == {
-        "tensorfold:dealign-direct", "org/keep", "org/moving", "org/gone"}, list(ids))
-    tf = ids.get("tensorfold:dealign-direct") or {}
-    check("stack row is first and flagged", s.models[0]["id"] == "tensorfold:dealign-direct"
+        "tensorfold:mia-dsv41", "org/keep", "org/moving", "org/gone"}, list(ids))
+    tf = ids.get("tensorfold:mia-dsv41") or {}
+    check("stack row is first and flagged", s.models[0]["id"] == "tensorfold:mia-dsv41"
           and tf.get("tf") is True and tf.get("engine") == "tf", s.models[0])
     check("stack row selectable", tf.get("cached") is True, tf)
     check("archived model flagged", ids["org/gone"]["cached"] is False
@@ -236,7 +236,7 @@ def main():
 
     # --- the TensorFold stack row: pick, apply, and the refusals
     s.refresh()
-    tf_id = "tensorfold:dealign-direct"
+    tf_id = "tensorfold:mia-dsv41"
     s.pick(tf_id)
     check("stack row can be picked", s.pending == tf_id, s.pending)
     s.loop = stub_loop(mod)
@@ -246,7 +246,7 @@ def main():
         pass
     check("apply on the stack row runs the switcher",
           s.exec_apply == [os.path.join(HOME, ".local/bin/spark-stack-switch"),
-                           "tensorfold", "dealign-direct", "--apply"],
+                           "tensorfold", "mia-dsv41", "--apply"],
           s.exec_apply)
     s.body.set_focus(0)
     s.msg = ""

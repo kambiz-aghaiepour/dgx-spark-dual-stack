@@ -1,16 +1,17 @@
 # DGX Spark Dual-Stack Deployment
 
 Two-node NVIDIA DGX Spark cluster (ASUS Ascent GX10, GB10 Superchip, 128 GB
-unified memory each) running **two alternative inference stacks** behind one
+unified memory each) running **multiple alternative inference stacks** behind one
 switch surface, plus the watchdog/supervision that keeps it serving.
 
 | Stack | Model | Engine | Measured decode (t/s) |
 |---|---|---|---|
-| **b12x** | DeepSeek-V4-Flash-Vision-Exp | `eugr/spark-vllm-docker` launcher, kernel-level b12x/MLAS build (instanttensor, MTP/B12X attention, FP8) | baseline (production default) |
-| **MiaAI-native** | nvidia/Qwen3.8-Flash-Next-NVFP4 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` stock-vLLM image + overlay patches | **45.5 mean / 68.3 peak** on this kit |
+| **TensorFold (MiaAI native-Zig)** | DeepSeek-V4.1-Flash-1017 | MiaAI-Lab TensorFold recipe, EXL3 TP=2 | **75–78** (current default) |
+| **b12x** | DeepSeek-V4-Flash-Vision-Exp | `eugr/spark-vllm-docker` launcher, kernel-level b12x/MLAS build (instanttensor, MTP/B12X attention, FP8) | baseline alternate |
+| **MiaAI-native** | nvidia/Qwen3.8-Flash-Next-NVFP4 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` stock-vLLM image + overlay patches | **45.5 mean / 68.3 peak** |
 
-One `vllm-model-set <id> --apply` switches the whole cluster; the wrapper
-dispatches each model to its own engine. Watchdog, health gate, selector,
+`spark-stack-switch` chooses the engine (`tensorfold` or `vllm`); inside vLLM,
+`vllm-model-set <id> --apply` chooses the checkpoint. Watchdog, health gate, selector,
 page-cache eviction and `--status` are stack-agnostic and unchanged.
 
 > This repo documents what was done on this cluster and ships the (scrubbed)
@@ -46,7 +47,7 @@ mesh — see [docs/setup-fresh-install.md](docs/setup-fresh-install.md).
 scripts/            deployment + switching + supervision scripts (see below)
 config/model.conf.template
 config/flags/       per-model flags files (vLLM serve args) + per-model .env
-config/tensorfold/  profiles for the separate TensorFold stack (DSv4.1)
+config/              model flags + the MiaAI DSv4.1 recipe settings example
 systemd/            user units (podman/health/warmup, optional exporters)
                     + the override.conf that wires start-select
 docs/               fresh-install, architecture notes, benchmarking,
@@ -115,33 +116,34 @@ then offers to set the same path on the worker; detection alone never counts as
 configured, so each node still needs its own `--set-path` before `x` works.
 
 Unarchiving is pre-checked against free space on the internal filesystem and
-refuses with a list of models to archive first when it would not fit. The model
-that is active — the `model.conf` boot default or whatever the engine is serving
-— cannot be archived at all: the tool refuses and tells you to switch to another
-model/engine first. Setup (mkfs/fstab/ownership), the on-disk layout and the
+refuses with a list of models to archive first when it would not fit. The default
+follows the active engine: while `stack.conf` says `tensorfold`, the vLLM model in
+`VLLM_MODEL` is only a parked choice and can be archived; while it says `vllm`,
+that model is the default and cannot be archived. `spark-stack-switch vllm` checks
+both nodes first and refuses to stop TensorFold for a checkpoint that is still on
+the archive disk. Setup (mkfs/fstab/ownership), the on-disk layout and the
 exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
-## Second stack: TensorFold (DeepSeek-V4.1-Flash, EXL3)
+## Second stack: TensorFold (DeepSeek-V4.1-Flash, MiaAI native-Zig)
 
-A separate engine stack for the EXL3 packs, run instead of vLLM and never beside it
-(one server at a time fits in 121 GiB/node). Port 8888, exllamav3-derived engine,
-podman instead of docker:
+A separate engine stack for DeepSeek-V4.1-Flash, run instead of vLLM and never beside it
+(one server at a time fits in 121 GiB/node). Port 8000 (shared with the vLLM stack; only
+one runs at a time), TensorFold's native Zig engine from the MiaAI-Lab recipe, docker:
 
 ```bash
-cp config/tensorfold/cluster.env.example ~/.config/spark-vllm/tensorfold/cluster.env
-./scripts/tensorfold-engine.sh build dealign-direct   # engine image on both nodes
-./scripts/tensorfold-model.sh  fetch dealign-direct   # ~416 GB, view + worker copy
-./scripts/tensorfold-model.sh  start dealign-direct
-./scripts/tensorfold-model.sh  verify dealign-direct
+./scripts/setup-mia-recipe.sh                 # clone the pinned recipe -> ~/mia-dsv41
+$EDITOR ~/mia-dsv41/scripts/local.sh           # WORKER, HF_CACHE, worker cache/engram dirs
+cd ~/mia-dsv41 && ./start.sh                   # first run: image build + ~400 GB download
 ```
 
-Profiles: `dealign-direct` (the abliterated EXL3 2.9 bpw bundle) and `base` (LibertAI
-pack). `dealign-direct` is verified on the pair: 5/5 API checks, 51 tok/s decode,
-131072 context, 103 GiB per node. Setup, space, memory, the BF16 engine revision it
-needs and what is *not* qualified yet: [docs/tensorfold.md](docs/tensorfold.md).
+The recipe serves `DeepSeek-V4.1-Flash-1017` (EXL3 EAQ 2.9 bpw + the base model's Engram
+tables) with the full 1,048,576-token window, DSpark drafts and 4 streams. Running data
+lives on the internal NVMe: `/srv/mia/hf` (head) and `/srv/mia/{engram,rank-cache}`
+(worker); the head exports `/srv/mia/hf` over NFS to the worker's CX7 address. `/archive`
+(the USB volume) holds archived vLLM models only, never a running stack.
 
-Switching between the stacks is a row in the selector (`tensorfold:dealign-direct`, first
-row) and a CLI: `spark-stack-switch --status | tensorfold [profile] --apply | vllm`.
+Switching between the stacks is a row in the selector (`tensorfold:mia-dsv41`, first row)
+and a CLI: `spark-stack-switch --status | tensorfold --apply | vllm`.
 `~/.config/spark-vllm/stack.conf` records the choice, and each stack has its own watchdog:
 `spark-tensorfold-watchdog.service` (idle unless stack.conf says tensorfold) next to the
 existing `spark-vllm-health.service` (idle while TensorFold owns the pair).

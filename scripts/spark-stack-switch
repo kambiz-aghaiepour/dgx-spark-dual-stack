@@ -8,16 +8,19 @@
 #
 # State lives in ~/.config/spark-vllm/stack.conf:
 #   STACK=vllm|tensorfold
-#   TF_PROFILE=dealign-direct
-# The selectors and both watchdogs read it; a missing file means vllm (the old default).
+#   TF_PROFILE=mia-dsv41
+#   VLLM_MODEL=<hf model id>   (the parked vLLM choice; only the default when STACK=vllm)
+# The selectors, archive helper and both watchdogs read it; a missing file means vllm.
+# stack.conf is replicated to the worker so archive decisions agree on both nodes.
 set -uo pipefail
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+MODEL_CONF="${SPARK_VLLM_MODEL_CONF:-$HOME/.config/spark-vllm/model.conf}"
 REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
-DEFAULT_PROFILE=dealign-direct
+DEFAULT_PROFILE=mia-dsv41
 VLLM_URL=${SPARK_VLLM_ENGINE_URL:-http://127.0.0.1:8000}
-TF_URL=${SPARK_TENSORFOLD_ENGINE_URL:-http://127.0.0.1:8888}
+TF_URL=${SPARK_TENSORFOLD_ENGINE_URL:-http://127.0.0.1:8000}
 WORKER=${SPARK_VLLM_WORKER:-gx10-02}
 
 log() { echo "[stack $(date -u +%H:%M:%SZ)] $*"; }
@@ -28,29 +31,77 @@ read_stack() {  # echoes vllm or tensorfold
   [ -f "$CONF" ] && s=$(sed -n 's/^STACK=//p' "$CONF" | head -1)
   case "$s" in tensorfold) echo tensorfold ;; *) echo vllm ;; esac
 }
+stack_value() {  # $1 key
+  sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1
+}
+model_id() {  # the vLLM checkpoint selected in model.conf
+  sed -n 's/^MODEL_ID=//p' "$MODEL_CONF" 2>/dev/null | head -1
+}
 write_stack() {  # $1 stack, $2 profile
+  local stack=$1 profile=${2:-$DEFAULT_PROFILE} vmodel="" body=""
+  if [ "$stack" = vllm ]; then
+    vmodel=$(model_id)
+  fi
+  [ -n "$vmodel" ] || vmodel=$(stack_value VLLM_MODEL)
+  [ -n "$vmodel" ] || vmodel=$(model_id)
+  body=$(cat <<EOF
+# Which serving stack this pair runs (managed by spark-stack-switch).
+# vllm: spark-vllm-podman.service on port 8000. tensorfold: spark-tensorfold.service on port 8000.
+# VLLM_MODEL is the parked vLLM choice; it is not the default while STACK=tensorfold.
+STACK=$stack
+TF_PROFILE=$profile
+VLLM_MODEL=$vmodel
+EOF
+)
   mkdir -p "$(dirname "$CONF")"
   umask 077
-  cat > "$CONF" <<EOF
-# Which serving stack this pair runs (managed by spark-stack-switch).
-# vllm: spark-vllm-podman.service on port 8000. tensorfold: spark-tensorfold.service on port 8888.
-STACK=$1
-TF_PROFILE=${2:-$DEFAULT_PROFILE}
-EOF
+  printf '%s\n' "$body" > "$CONF"
+  # The archive helper runs on both nodes; keep its view of the active engine in step.
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$WORKER" \
+      "mkdir -p ~/.config/spark-vllm && cat > ~/.config/spark-vllm/stack.conf" <<<"$body" 2>/dev/null; then
+    log "warning: could not write stack.conf on $WORKER (archive decisions there may use the old stack)"
+  fi
+}
+model_cached() {  # $1 head|worker, $2 model id
+  local node=$1 mid=$2 dir
+  dir=".cache/huggingface/hub/models--${mid//\//--}"
+  if [ "$node" = head ]; then
+    [ -d "$HOME/$dir" ]
+  else
+    ssh -o BatchMode=yes -o ConnectTimeout=8 "$WORKER" "test -d \"\$HOME/$dir\"" 2>/dev/null
+  fi
+}
+require_vllm_cached() {  # refuse to stop TensorFold for a model that is not resident
+  local mid
+  mid=$(model_id)
+  [ -n "$mid" ] || mid=$(stack_value VLLM_MODEL)
+  [ -n "$mid" ] || die "no vLLM model selected (model.conf has no MODEL_ID)"
+  model_cached head "$mid" || die "vLLM model $mid is not cached on the head (archived? restore it first: vllm-model-archive.py --unarchive '$mid')"
+  model_cached worker "$mid" || die "vLLM model $mid is not cached on $WORKER (archived? restore it first: vllm-model-archive.py --unarchive '$mid')"
 }
 answers() { curl -fsS -m 3 "$1/v1/models" >/dev/null 2>&1; }
 
 case "${1:---status}" in
   --status|-s)
     cur=$(read_stack); prof=$(sed -n 's/^TF_PROFILE=//p' "$CONF" 2>/dev/null | head -1)
+    vmodel=$(sed -n 's/^VLLM_MODEL=//p' "$CONF" 2>/dev/null | head -1)
     printf 'stack.conf:   %s%s\n' "$cur" "${prof:+ (profile $prof)}"
-    printf 'vllm:         unit %s, api %s\n' \
-      "$(systemctl --user is-active spark-vllm-podman.service 2>/dev/null)" \
-      "$(answers "$VLLM_URL" && echo up || echo down)"
-    printf 'tensorfold:   unit %s, watchdog %s, api %s\n' \
-      "$(systemctl --user is-active spark-tensorfold.service 2>/dev/null)" \
-      "$(systemctl --user is-active spark-tensorfold-watchdog.service 2>/dev/null)" \
-      "$(answers "$TF_URL" && echo up || echo down)"
+    printf 'vllm model:   %s (parked unless the stack is vllm)\n' "${vmodel:-$(model_id)}"
+    if [ "$cur" = tensorfold ]; then
+      printf 'vllm:         unit %s (not the active stack)\n' \
+        "$(systemctl --user is-active spark-vllm-podman.service 2>/dev/null)"
+      printf 'tensorfold:   unit %s, watchdog %s, api %s\n' \
+        "$(systemctl --user is-active spark-tensorfold.service 2>/dev/null)" \
+        "$(systemctl --user is-active spark-tensorfold-watchdog.service 2>/dev/null)" \
+        "$(answers "$TF_URL" && echo up || echo down)"
+    else
+      printf 'vllm:         unit %s, api %s\n' \
+        "$(systemctl --user is-active spark-vllm-podman.service 2>/dev/null)" \
+        "$(answers "$VLLM_URL" && echo up || echo down)"
+      printf 'tensorfold:   unit %s, watchdog %s (not the active stack)\n' \
+        "$(systemctl --user is-active spark-tensorfold.service 2>/dev/null)" \
+        "$(systemctl --user is-active spark-tensorfold-watchdog.service 2>/dev/null)"
+    fi
     exit 0 ;;
   vllm|tensorfold) ;;
   *) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2 ;;
@@ -78,6 +129,8 @@ if [ "$target" = tensorfold ]; then
   write_stack tensorfold "$profile"
   log "vLLM stopped (unit + containers), stack.conf -> tensorfold/$profile"
 else
+  # Never stop the live TensorFold stack for a vLLM checkpoint that is not resident.
+  require_vllm_cached
   systemctl --user stop spark-tensorfold-watchdog.service 2>/dev/null
   systemctl --user stop spark-tensorfold.service 2>/dev/null
   write_stack vllm "$profile"
@@ -91,7 +144,8 @@ fi
 
 # --- start the target stack --------------------------------------------------------
 if [ "$target" = tensorfold ]; then
-  [ -x "$REPO/scripts/tensorfold-model.sh" ] || die "no launcher at $REPO/scripts/tensorfold-model.sh (set SPARK_TENSORFOLD_REPO_DIR)"
+  MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
+  [ -x "$MIA_DIR/start.sh" ] || die "Mia recipe missing at $MIA_DIR (run $REPO/scripts/setup-mia-recipe.sh)"
   systemctl --user reset-failed spark-tensorfold.service 2>/dev/null
   log "starting spark-tensorfold.service (first start after a change writes the rank caches: minutes)"
   # restart, not start: the unit is enabled at boot and exits 0 when stack.conf is vllm

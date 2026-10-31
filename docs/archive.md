@@ -12,6 +12,22 @@ Two tools, one state:
   the worker over ssh from the head.
 - `vllm-model-select` — the TUI; `x` archive, `u` unarchive, `p` archive path.
 
+## The default follows the engine, not vLLM
+
+`stack.conf` is the single selection:
+
+```
+STACK=vllm|tensorfold
+TF_PROFILE=mia-dsv41
+VLLM_MODEL=<hf model id>
+```
+
+`VLLM_MODEL` is the default only while `STACK=vllm`. Under TensorFold it is a parked
+choice, so its cache can be archived; it must be unarchived before switching back to vLLM.
+`spark-stack-switch` checks both nodes and refuses to stop TensorFold when the target vLLM
+checkpoint is not resident. A default is always on internal NVMe; the archive disk only
+holds restorable copies and never bootstraps an engine.
+
 ## 1. The disks (one per node)
 
 What we use: a 2 TB USB SSD per Spark (Fikwot FP80, USB 3.2 Gen2x2 enclosure,
@@ -147,10 +163,11 @@ the per-node result.
 
 ### Rules the tool enforces
 
-- **The active model cannot be archived** — neither the boot default in
-  `model.conf` nor whatever the engine is serving: "cannot archive the current
-  model … switch to another model/engine first". The check runs on both nodes and
-  before any copy.
+- **The active vLLM model cannot be archived, but only while `STACK=vllm`** —
+  neither the vLLM boot choice in `model.conf` nor whatever the engine is serving:
+  "cannot archive the current model … switch to another model/engine first". Under
+  TensorFold the vLLM choice is parked, so it can be archived; switching back
+  refuses until it is unarchived. The check runs on both nodes and before any copy.
 - **Nothing is deleted until every node's copy verifies.** A failure during the
   copy phase rolls the staged archive directories back, so you never get a
   half-archived model.

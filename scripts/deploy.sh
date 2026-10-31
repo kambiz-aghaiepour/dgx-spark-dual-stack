@@ -45,7 +45,7 @@ install -m 0755 "$HERE"/scripts/vllm-model-archive.py "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/vllm-model-archive "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-evict-cache.py "$HOME/.local/bin/"
 # second stack: the switcher plus the TensorFold unit's start/stop/health/watchdog wrappers
-install -m 0755 "$HERE"/scripts/{spark-stack-switch,spark-tensorfold-start,spark-tensorfold-stop,spark-tensorfold-health,spark-tensorfold-watchdog} \
+install -m 0755 "$HERE"/scripts/{spark-stack-switch,spark-tensorfold-start,spark-tensorfold-stop,spark-tensorfold-health,spark-tensorfold-watchdog,setup-mia-recipe.sh} \
   "$HOME/.local/bin/"
 install -m 0755 "$HERE"/scripts/spark-vllm-warmup.sh "$HOME/"
 

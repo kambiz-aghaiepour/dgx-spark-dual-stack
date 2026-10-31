@@ -1,18 +1,17 @@
 #!/bin/bash
-# Start the TensorFold stack for the systemd user unit (ExecStart).
-# The recipe launcher does the work; this wrapper only locates it and the profile.
+# Start the TensorFold stack (MiaAI-Lab DSv4.1 native-Zig engine) for the systemd unit.
+# The recipe's start.sh does the work; this wrapper gates on stack.conf and locates it.
 set -euo pipefail
-REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
 CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
-PROFILE="${SPARK_TENSORFOLD_PROFILE:-}"
-if [ -z "$PROFILE" ] && [ -f "$CONF" ]; then
-  PROFILE=$(sed -n 's/^TF_PROFILE=//p' "$CONF" | head -1)
-fi
-[ -n "$PROFILE" ] || PROFILE=dealign-direct
 STACK=""
 [ -f "$CONF" ] && STACK=$(sed -n 's/^STACK=//p' "$CONF" | head -1)
 if [ "$STACK" != tensorfold ]; then
   echo "spark-tensorfold-start: stack.conf says '${STACK:-vllm}', not tensorfold - nothing to do"
   exit 0
 fi
-exec "$REPO/scripts/tensorfold-model.sh" start "$PROFILE"
+MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
+[ -x "$MIA_DIR/start.sh" ] || {
+  echo "spark-tensorfold-start: Mia recipe missing at $MIA_DIR (run scripts/setup-mia-recipe.sh)" >&2
+  exit 1
+}
+exec "$MIA_DIR/start.sh"
