@@ -6,7 +6,9 @@ and never beside it. It serves DeepSeek-V4.1-Flash-1017 with TensorFold's native
 [DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks).
 The recipe itself is third-party (Apache-2.0) and lives outside this repo, at
 `~/mia-dsv41` by default; `scripts/setup-mia-recipe.sh` clones the pin and installs its
-`scripts/local.sh`.
+`scripts/local.sh`. The pin is our fork of the upstream recipe: it adds the container-runtime
+switch (`CONTAINER_RT`, `scripts/runtime.sh`) this pair runs on, offered upstream as
+[MiaAI-Lab#113](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/pull/113).
 
 ## What it serves
 
@@ -19,8 +21,10 @@ The recipe itself is third-party (Apache-2.0) and lives outside this repo, at
 
 ## Prerequisites
 
-- Docker with GPU support on both Sparks, and the login user in the `docker` group
-  (`sudo usermod -aG docker kambiz` on both; log in again or use a new ssh session).
+- **Podman** (4.9+, for `--gpus all`) on both Sparks, driven **rootful** through passwordless
+  `sudo -n podman`: the worker's read-only NFS volume and the `tensorfold.slice` cgroup parent
+  both need root. Docker still works (`CONTAINER_RT=docker` in `scripts/local.sh`); the recipe
+  documents both in `docs/PODMAN.md` of its own tree.
 - The Hugging Face CLI (`hf`) on the head. `prepare.sh` downloads ~400 GB.
 - An NFS export of the head's `HF_CACHE` to the worker's CX7 address, because the worker
   reads the checkpoint over NFS:
@@ -50,9 +54,31 @@ cd ~/mia-dsv41 && ./verify.sh                 # five real requests against the A
 ```
 
 `start.sh` auto-runs `prepare.sh` when the image, checkpoint, weight files or worker copies
-are missing; `DRY_RUN=1 ./start.sh` prints both ranks' docker commands without changing
+are missing; `DRY_RUN=1 ./start.sh` prints both ranks' runtime commands without changing
 anything. The official control path is `spark-stack-switch` (it starts/stops the systemd
 unit); `./start.sh` is the recipe's implementation detail and is what the unit runs.
+
+## Runtime
+
+The pair runs the recipe under **rootful podman**; `~/mia-dsv41/scripts/local.sh` carries:
+
+```sh
+CONTAINER_RT=podman
+CONTAINER_RT_SUDO=1
+CGROUP_PARENT=tensorfold.slice     # the host tuning's slice: MemorySwapMax=0
+```
+
+Podman keeps its own image store, so the image is copied once per node when moving from
+Docker: `sudo -n docker save tensorfold-dsv41:<tag> | sudo -n podman load` on the head, and
+the same through `ssh kambiz@gx10-02` on the worker. `scripts/prepare.sh` then sees the image
+missing from the podman store and copies it from the head if it is not there. Rollback is
+`CONTAINER_RT=docker` (plus `./start.sh restart`): the Docker image and container name are
+untouched by a podman run.
+
+```bash
+sudo -n podman ps --format '{{.Names}} {{.Status}}'      # dsv41-1017-exl3-tf on both nodes
+sudo -n podman logs -f dsv41-1017-exl3-tf                # rank 0 (ssh gx10-02 for rank 1)
+```
 
 ## Switching
 

@@ -128,6 +128,32 @@ else
 fi
 
 echo
+echo "-- TensorFold runtime (Mia recipe)"
+MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
+if [ -f "$MIA_DIR/scripts/local.sh" ]; then
+  rt=$(sed -n 's/^CONTAINER_RT=//p' "$MIA_DIR/scripts/local.sh" | head -1); rt=${rt:-docker}
+  rts=$(sed -n 's/^CONTAINER_RT_SUDO=//p' "$MIA_DIR/scripts/local.sh" | head -1); rts=${rts:-0}
+  ok "recipe runtime: $rt (CONTAINER_RT_SUDO=$rts)"
+  if [ "$rt" = podman ]; then
+    if command -v podman >/dev/null 2>&1; then ok "podman installed"; else bad "podman missing"; fi
+    if [ "$rts" = 1 ]; then
+      if sudo -n podman info >/dev/null 2>&1; then ok "rootful podman answers (sudo -n podman info)"; else bad "sudo -n podman info fails"; fi
+    else
+      if podman info >/dev/null 2>&1; then ok "podman answers"; else bad "podman info fails"; fi
+    fi
+    img=$(sudo -n podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -m1 '^tensorfold-dsv41:')
+    if [ -n "$img" ]; then ok "TensorFold image in the podman store ($img)"; else bad "no tensorfold-dsv41 image in the podman store (docker save | podman load)"; fi
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dsv41-1017-exl3-tf; then
+      bad "a docker container named dsv41-1017-exl3-tf still runs (podman should own it)"
+    else
+      ok "no docker container named dsv41-1017-exl3-tf"
+    fi
+  fi
+else
+  note "no $MIA_DIR/scripts/local.sh (run scripts/setup-mia-recipe.sh)"
+fi
+
+echo
 echo "-- runtime state (not repo artifacts)"
 if [ -s "$CFG/model.conf" ]; then
   ok "$CFG/model.conf present ($(grep -m1 '^MODEL_ID=' "$CFG/model.conf" | cut -d= -f2-))"
