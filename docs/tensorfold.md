@@ -6,9 +6,12 @@ and never beside it. It serves DeepSeek-V4.1-Flash-1017 with TensorFold's native
 [DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks).
 The recipe itself is third-party (Apache-2.0) and lives outside this repo, at
 `~/mia-dsv41` by default; `scripts/setup-mia-recipe.sh` clones the pin and installs its
-`scripts/local.sh`. The pin is our fork of the upstream recipe: it adds the container-runtime
-switch (`CONTAINER_RT`, `scripts/runtime.sh`) this pair runs on, offered upstream as
+`scripts/local.sh`. The pin is **our fork** of the upstream recipe —
+[kambiz-aghaiepour/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks](https://github.com/kambiz-aghaiepour/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks),
+branch `podman-support` — which adds the container-runtime switch (`CONTAINER_RT`,
+`scripts/runtime.sh`) this pair runs on, offered upstream as
 [MiaAI-Lab#113](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/pull/113).
+The fork keeps upstream's Apache-2.0 `LICENSE`; docker remains the upstream default.
 
 ## What it serves
 

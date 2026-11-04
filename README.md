@@ -128,7 +128,9 @@ exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
 A separate engine stack for DeepSeek-V4.1-Flash, run instead of vLLM and never beside it
 (one server at a time fits in 121 GiB/node). Port 8000 (shared with the vLLM stack; only
-one runs at a time), TensorFold's native Zig engine from the MiaAI-Lab recipe, docker:
+one runs at a time), TensorFold's native Zig engine from the MiaAI-Lab recipe, run under
+**rootful podman via our `podman-support` fork** (docker is still the recipe's default;
+[runtime notes](docs/tensorfold.md)):
 
 ```bash
 ./scripts/setup-mia-recipe.sh                 # clone the pinned recipe -> ~/mia-dsv41
@@ -273,7 +275,8 @@ not in this repo**. The templates and defaults live under `config/`; scripts
 (notably `vllm-model-set`) manage the live files. `deploy.sh` therefore never
 overwrites an existing `model.conf` (use `--force-config` to reset it).
 
-Also not tracked: `~/spark-vllm-docker` (separate fork), `~/miaai-qwen38`
+Also not tracked: `~/spark-vllm-docker` (separate fork), `~/mia-dsv41` (the MiaAI
+DSv4.1 recipe, cloned from our `podman-support` fork at the pinned commit), `~/miaai-qwen38`
 (produced by `podman-adapt-runbook.sh`), `~/.local/share/vllm-tui/venv`
 (selector tooling) and `~/.config/spark-vllm/archive.conf` (per-node archive
 path). Archived checkpoints live on the external disk, not in the repo. Full
@@ -309,6 +312,24 @@ are out of scope and referenced only).
     (<https://github.com/christopherowen/spark-vllm-mxfp4-docker>)
   - b12x engine fork by Luke Alonso (`local-inference-lab/vllm`,
     `--exp-b12x` per eugr README), plus `nvcr.io/nvidia/pytorch` NGC base image
+- **TensorFold / DeepSeek-V4.1-Flash-1017 stack** (the current default):
+  - **Upstream (credit): `MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks`** —
+    the two-Spark recipe this stack is built from: image build, weight fetch,
+    NFS sharing, the `dsv41-tensorfold` unit and the native-Zig TensorFold
+    server (BertholomusAI's `dsv41` family, `tensorfold-native`)
+    (<https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks>).
+  - **`kambiz-aghaiepour/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks`** — **our
+    fork** of the above (<https://github.com/kambiz-aghaiepour/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks>),
+    branch **`podman-support`**: adds the container-runtime switch this cluster
+    runs (`CONTAINER_RT=podman`, `scripts/runtime.sh`, the podman-specific NFS
+    volume spelling and the memory guard's runtime call). Upstream defaults to
+    docker and still can; podman is opt-in on both. Offered back as PR
+    **[MiaAI-Lab#113](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/pull/113)**.
+    `scripts/setup-mia-recipe.sh` clones and pins **the fork**, so this repo
+    records exactly which commit of which repo produced the environment
+    (upstream updates are merged into `podman-support`, not pulled over it).
+  - Weights: `DeepSeek-V4.1-Flash-1017` EXL3 EAQ 2.9 bpw + the base model's
+    Engram tables (abliterated bundle), fetched by the recipe, not vendored here.
 - **Qwen3.8-Flash-Next stack**:
   - `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` — runbook, image
     `vllm/vllm-openai:qwen38-flash-next`, overlay patches, 47k draft vocab
