@@ -1,17 +1,38 @@
 #!/bin/bash
-# Start the TensorFold stack (MiaAI-Lab DSv4.1 native-Zig engine) for the systemd unit.
-# The recipe's start.sh does the work; this wrapper gates on stack.conf and locates it.
+# Start the TensorFold stack for spark-tensorfold.service: whichever profile stack.conf selects (see
+# scripts/tensorfold-profiles.sh). The recipe's own start.sh does the work; this wrapper gates on stack.conf, locates
+# the checkout, and hands it the secrets a profile keeps outside the checkout.
 set -euo pipefail
-CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+# shellcheck source=tensorfold-profiles.sh
+. "$HERE/tensorfold-profiles.sh"
+
+CONF=$(tf_stack_conf)
 STACK=""
 [ -f "$CONF" ] && STACK=$(sed -n 's/^STACK=//p' "$CONF" | head -1)
 if [ "$STACK" != tensorfold ]; then
   echo "spark-tensorfold-start: stack.conf says '${STACK:-vllm}', not tensorfold - nothing to do"
   exit 0
 fi
-MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
-[ -x "$MIA_DIR/start.sh" ] || {
-  echo "spark-tensorfold-start: Mia recipe missing at $MIA_DIR (run scripts/setup-mia-recipe.sh)" >&2
+
+PROFILE=$(tf_profile)
+DIR=$(tf_profile_dir "$PROFILE")
+[ -x "$DIR/start.sh" ] || {
+  echo "spark-tensorfold-start: profile $PROFILE needs $DIR/start.sh (run scripts/$(tf_profile_setup "$PROFILE"))" >&2
   exit 1
 }
-exec "$MIA_DIR/start.sh"
+
+# A profile may need a secret that belongs neither in the checkout nor in the unit file (the gated GLM weights need
+# HF_TOKEN even though they are already on disk).
+ENVF=$(tf_profile_env_file "$PROFILE")
+if [ -n "$ENVF" ] && [ -f "$ENVF" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENVF"
+  set +a
+fi
+
+echo "spark-tensorfold-start: profile $PROFILE - $(tf_profile_note "$PROFILE")"
+echo "spark-tensorfold-start: recipe $DIR"
+exec "$DIR/start.sh"

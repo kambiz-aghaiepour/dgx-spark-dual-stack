@@ -6,7 +6,8 @@ switch surface, plus the watchdog/supervision that keeps it serving.
 
 | Stack | Model | Engine | Measured decode (t/s) |
 |---|---|---|---|
-| **TensorFold (MiaAI native-Zig)** | DeepSeek-V4.1-Flash-1017 | MiaAI-Lab TensorFold recipe, EXL3 TP=2 | **75–78** (current default) |
+| **TensorFold — `mia-dsv41`** | DeepSeek-V4.1-Flash-1017 | MiaAI-Lab TensorFold recipe, EXL3 TP=2 | **55.3–55.6** measured (recipe claims 75–78) |
+| **TensorFold — `glm53`** | GLM-5.3-Flash-EXL3 (Ablit) | same engine, second profile, DFlash2 drafter | **41.6** single stream / **92.4** at 4 |
 | **b12x** | DeepSeek-V4-Flash-Vision-Exp | `eugr/spark-vllm-docker` launcher, kernel-level b12x/MLAS build (instanttensor, MTP/B12X attention, FP8) | baseline alternate |
 | **MiaAI-native** | nvidia/Qwen3.8-Flash-Next-NVFP4 | `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` stock-vLLM image + overlay patches | **45.5 mean / 68.3 peak** |
 
@@ -124,13 +125,19 @@ both nodes first and refuses to stop TensorFold for a checkpoint that is still o
 the archive disk. Setup (mkfs/fstab/ownership), the on-disk layout and the
 exact move/verify/delete sequence are in [docs/archive.md](docs/archive.md).
 
-## Second stack: TensorFold (DeepSeek-V4.1-Flash, MiaAI native-Zig)
+## Second stack: TensorFold (two profiles: DeepSeek-V4.1-Flash and GLM-5.3-Flash)
 
-A separate engine stack for DeepSeek-V4.1-Flash, run instead of vLLM and never beside it
-(one server at a time fits in 121 GiB/node). Port 8000 (shared with the vLLM stack; only
-one runs at a time), TensorFold's native Zig engine from the MiaAI-Lab recipe, run under
-**rootful podman via our `podman-support` fork** (docker is still the recipe's default;
-[runtime notes](docs/tensorfold.md)):
+A separate engine stack, run instead of vLLM and never beside it (one server at a time fits
+in 121 GiB/node). Port 8000 is shared with the vLLM stack; only one runs at a time. TensorFold
+is MiaAI-Lab's native Zig engine, run under **rootful podman via our `podman-support` forks**
+(docker is still each recipe's default; [runtime notes](docs/tensorfold.md)). Two profiles are
+wired in, and `stack.conf`'s `TF_PROFILE` picks the live one:
+
+- **`mia-dsv41`** — DeepSeek-V4.1-Flash-1017, `~/mia-dsv41`
+- **`glm53`** — GLM-5.3-Flash-EXL3 (gated Ablit weights), `~/glm53`
+
+One unit runs whichever profile is selected, so switching a profile also switches the reboot
+default:
 
 ```bash
 ./scripts/setup-mia-recipe.sh                 # clone the pinned recipe -> ~/mia-dsv41
@@ -144,11 +151,20 @@ lives on the internal NVMe: `/srv/mia/hf` (head) and `/srv/mia/{engram,rank-cach
 (worker); the head exports `/srv/mia/hf` over NFS to the worker's CX7 address. `/archive`
 (the USB volume) holds archived vLLM models only, never a running stack.
 
-Switching between the stacks is a row in the selector (`tensorfold:mia-dsv41`, first row)
-and a CLI: `spark-stack-switch --status | tensorfold --apply | vllm`.
-`~/.config/spark-vllm/stack.conf` records the choice, and each stack has its own watchdog:
-`spark-tensorfold-watchdog.service` (idle unless stack.conf says tensorfold) next to the
-existing `spark-vllm-health.service` (idle while TensorFold owns the pair).
+```bash
+./scripts/setup-glm-recipe.sh                 # clone the pinned GLM recipe -> ~/glm53 (+ 0600 token file)
+cd ~/glm53 && ./scripts/prepare.sh            # pinned image + ~180 GB gated checkpoint + worker copy
+spark-stack-switch tensorfold glm53 --apply   # first start compiles the CUDA kernels (~6 min)
+```
+
+Switching is a row in the selector (`tensorfold:glm53` / `tensorfold:mia-dsv41`) and a CLI:
+`spark-stack-switch --status | tensorfold <profile> --apply | vllm --apply`.
+`~/.config/spark-vllm/stack.conf` records the choice **and** drives boot enablement: every
+switch enables the incoming stack's unit and disables the outgoing one, so a reboot comes up on
+exactly what was running (`verify-deployment.sh` fails if the two disagree). Each stack has its
+own watchdog: `spark-tensorfold-watchdog.service` (idle unless stack.conf says tensorfold, and
+it probes whichever profile is live) next to `spark-vllm-health.service` (idle while TensorFold
+owns the pair).
 
 ## Fresh install (from scratch)
 
@@ -330,6 +346,18 @@ are out of scope and referenced only).
     (upstream updates are merged into `podman-support`, not pulled over it).
   - Weights: `DeepSeek-V4.1-Flash-1017` EXL3 EAQ 2.9 bpw + the base model's
     Engram tables (abliterated bundle), fetched by the recipe, not vendored here.
+- **TensorFold / GLM-5.3-Flash-EXL3 stack** (the `glm53` profile):
+  - **Upstream (credit): `MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold`** — the
+    two-Spark GLM recipe: image build, gated weight fetch, drafter, CUDA extension
+    (<https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold>).
+  - **`kambiz-aghaiepour/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold`** — **our fork**,
+    branch **`podman-support`**: the same runtime switch, plus the four things rootful podman
+    needed (readable image store, token passed by value, kernel-cache mount source, no
+    `--shm-size` with `--ipc=host`). Offered back as PR
+    **[MiaAI-Lab#246](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/246)**.
+    `scripts/setup-glm-recipe.sh` clones and pins **the fork**.
+  - Weights: `Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit` (gated, ~176 GB) plus
+    `incoai/GLM-5.3-Flash-DFlash2` drafts, fetched by the recipe, not vendored here.
 - **Qwen3.8-Flash-Next stack**:
   - `MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks` — runbook, image
     `vllm/vllm-openai:qwen38-flash-next`, overlay patches, 47k draft vocab

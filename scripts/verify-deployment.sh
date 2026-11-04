@@ -52,6 +52,7 @@ for s in vllm-model-select.py vllm-model-set spark-vllm-watchdog \
          spark-tensorfold-health spark-tensorfold-watchdog; do
   check_file "$HERE/scripts/$s" "$BIN/$s"
 done
+check_file "$HERE/scripts/tensorfold-profiles.sh" "$BIN/tensorfold-profiles.sh"
 check_file "$HERE/scripts/spark-vllm-warmup.sh" "$HOME/spark-vllm-warmup.sh"
 
 echo
@@ -127,13 +128,41 @@ else
   bad "spark-stack-switch missing"
 fi
 
+# A reboot must come up on the stack that is live: spark-stack-switch keeps the unit enablement in step.
+cur_stack=$(sed -n 's/^STACK=//p' "$CFG/stack.conf" 2>/dev/null | head -1); cur_stack=${cur_stack:-vllm}
+tf_en=$(systemctl --user is-enabled spark-tensorfold.service 2>/dev/null || true)
+vl_en=$(systemctl --user is-enabled spark-vllm-podman.service 2>/dev/null || true)
+if [ "$cur_stack" = tensorfold ]; then
+  if [ "$tf_en" = enabled ] && [ "$vl_en" != enabled ]; then
+    ok "boot follows stack.conf: spark-tensorfold.service enabled, spark-vllm-podman.service $vl_en"
+  else
+    bad "stack.conf says tensorfold but boot enablement disagrees (tensorfold=$tf_en vllm=$vl_en) - run spark-stack-switch tensorfold --apply"
+  fi
+else
+  if [ "$vl_en" = enabled ] && [ "$tf_en" != enabled ]; then
+    ok "boot follows stack.conf: spark-vllm-podman.service enabled, spark-tensorfold.service $tf_en"
+  else
+    bad "stack.conf says vllm but boot enablement disagrees (vllm=$vl_en tensorfold=$tf_en) - run spark-stack-switch vllm --apply"
+  fi
+fi
+
 echo
-echo "-- TensorFold runtime (Mia recipe)"
-MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
-if [ -f "$MIA_DIR/scripts/local.sh" ]; then
-  rt=$(sed -n 's/^CONTAINER_RT=//p' "$MIA_DIR/scripts/local.sh" | head -1); rt=${rt:-docker}
-  rts=$(sed -n 's/^CONTAINER_RT_SUDO=//p' "$MIA_DIR/scripts/local.sh" | head -1); rts=${rts:-0}
-  ok "recipe runtime: $rt (CONTAINER_RT_SUDO=$rts)"
+echo "-- TensorFold runtime (the live profile's recipe)"
+if [ -f "$BIN/tensorfold-profiles.sh" ]; then
+  # shellcheck source=tensorfold-profiles.sh
+  . "$BIN/tensorfold-profiles.sh"
+  TF_PROFILE_NOW=$(tf_profile)
+  TDIR=$(tf_profile_dir "$TF_PROFILE_NOW")
+  ok "profile: $TF_PROFILE_NOW - $(tf_profile_model "$TF_PROFILE_NOW")"
+else
+  TF_PROFILE_NOW=mia-dsv41
+  TDIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
+  note "tensorfold-profiles.sh not deployed: assuming profile $TF_PROFILE_NOW"
+fi
+if [ -f "$TDIR/scripts/local.sh" ]; then
+  rt=$(sed -n 's/^CONTAINER_RT=//p' "$TDIR/scripts/local.sh" | head -1); rt=${rt:-docker}
+  rts=$(sed -n 's/^CONTAINER_RT_SUDO=//p' "$TDIR/scripts/local.sh" | head -1); rts=${rts:-0}
+  ok "recipe runtime: $rt (CONTAINER_RT_SUDO=$rts) in $TDIR"
   if [ "$rt" = podman ]; then
     if command -v podman >/dev/null 2>&1; then ok "podman installed"; else bad "podman missing"; fi
     if [ "$rts" = 1 ]; then
@@ -141,17 +170,27 @@ if [ -f "$MIA_DIR/scripts/local.sh" ]; then
     else
       if podman info >/dev/null 2>&1; then ok "podman answers"; else bad "podman info fails"; fi
     fi
-    # the head's store may name it docker.io/library/tensorfold-dsv41:<tag> (podman's short-name expansion)
-    img=$(sudo -n podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -m1 -E '(^|/)tensorfold-dsv41:')
-    if [ -n "$img" ]; then ok "TensorFold image in the podman store ($img)"; else bad "no tensorfold-dsv41 image in the podman store (docker save | podman load)"; fi
-    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dsv41-1017-exl3-tf; then
-      bad "a docker container named dsv41-1017-exl3-tf still runs (podman should own it)"
+    # the head's store may name it docker.io/library/<repo>:<tag> (podman's short-name expansion)
+    repo="tensorfold-dsv41"; container="dsv41-1017-exl3-tf"
+    if [ -f "$BIN/tensorfold-profiles.sh" ]; then repo=$(tf_profile_image "$TF_PROFILE_NOW"); container=$(tf_profile_container "$TF_PROFILE_NOW"); fi
+    if img=$(sudo -n podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -m1 -E "(^|/)$repo:"); then
+      ok "image in the podman store ($img)"
     else
-      ok "no docker container named dsv41-1017-exl3-tf"
+      bad "no $repo image in the podman store (docker save | podman load)"
+    fi
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container"; then
+      bad "a docker container named $container still runs (podman should own it)"
+    else
+      ok "no docker container named $container"
+    fi
+    if sudo -n podman ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container"; then
+      ok "container $container runs under podman"
+    else
+      note "container $container is not running (stack may be switched out)"
     fi
   fi
 else
-  note "no $MIA_DIR/scripts/local.sh (run scripts/setup-mia-recipe.sh)"
+  note "no $TDIR/scripts/local.sh (run scripts/$( [ -f "$BIN/tensorfold-profiles.sh" ] && tf_profile_setup "$TF_PROFILE_NOW" || echo setup-mia-recipe.sh ))"
 fi
 
 echo

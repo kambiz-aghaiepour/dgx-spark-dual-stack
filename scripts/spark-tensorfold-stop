@@ -1,6 +1,20 @@
 #!/bin/bash
-# Stop the TensorFold stack (MiaAI-Lab DSv4.1 recipe).
-set -euo pipefail
-MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
-[ -x "$MIA_DIR/stop.sh" ] || { echo "spark-tensorfold-stop: no $MIA_DIR/stop.sh - nothing to do"; exit 0; }
-exec "$MIA_DIR/stop.sh"
+# Stop the TensorFold stack: the profile stack.conf names (see scripts/tensorfold-profiles.sh).
+# The recipe's own stop.sh removes its containers on every Spark; this wrapper only chooses the checkout.
+#
+# Ordering matters when the profile changes: spark-stack-switch stops the running unit *before* it rewrites
+# stack.conf, so this wrapper still resolves the profile that is actually up.
+set -uo pipefail
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+# shellcheck source=tensorfold-profiles.sh
+. "$HERE/tensorfold-profiles.sh"
+
+PROFILE=$(tf_profile)
+DIR=$(tf_profile_dir "$PROFILE")
+if [ ! -x "$DIR/stop.sh" ]; then
+  echo "spark-tensorfold-stop: profile $PROFILE has no $DIR/stop.sh - nothing to do"
+  exit 0
+fi
+echo "spark-tensorfold-stop: profile $PROFILE ($(tf_profile_container "$PROFILE"))"
+exec "$DIR/stop.sh"

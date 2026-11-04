@@ -1,5 +1,5 @@
 [Unit]
-Description=Spark TensorFold (MiaAI DSv4.1 native-Zig, TP=2, port 8000)
+Description=Spark TensorFold (MiaAI native-Zig engine; profile from stack.conf, TP=2, port 8000)
 After=network-online.target
 Wants=network-online.target
 

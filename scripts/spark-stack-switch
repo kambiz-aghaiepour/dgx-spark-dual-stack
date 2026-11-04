@@ -2,13 +2,18 @@
 # Switch the pair between the two serving stacks. One stack at a time: both want the
 # whole machine (~100 GiB of 121 per node).
 #
-#   spark-stack-switch tensorfold [profile] [--apply]   # stop vLLM, start TensorFold + its watchdog
-#   spark-stack-switch vllm                              # stop TensorFold + its watchdog (vLLM starts on its own)
+#   spark-stack-switch tensorfold [profile] [--apply]   # stop vLLM, start TensorFold (profile) + its watchdog
+#   spark-stack-switch vllm                              # stop TensorFold + watchdog (vLLM starts on its own)
 #   spark-stack-switch --status                          # what is written down vs what answers
+#
+# TensorFold profiles (scripts/tensorfold-profiles.sh): mia-dsv41 (DeepSeek-V4.1-Flash-1017) and
+# glm53 (GLM-5.3-Flash-EXL3). One systemd unit, spark-tensorfold.service, runs whichever profile is selected, and every
+# switch enables that unit at boot and disables the other stack's - so a reboot always comes up on the stack that was
+# live, with no second enable flag to drift.
 #
 # State lives in ~/.config/spark-vllm/stack.conf:
 #   STACK=vllm|tensorfold
-#   TF_PROFILE=mia-dsv41
+#   TF_PROFILE=mia-dsv41|glm53
 #   VLLM_MODEL=<hf model id>   (the parked vLLM choice; only the default when STACK=vllm)
 # The selectors, archive helper and both watchdogs read it; a missing file means vllm.
 # stack.conf is replicated to the worker so archive decisions agree on both nodes.
@@ -18,7 +23,10 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 CONF="${SPARK_STACK_CONF:-$HOME/.config/spark-vllm/stack.conf}"
 MODEL_CONF="${SPARK_VLLM_MODEL_CONF:-$HOME/.config/spark-vllm/model.conf}"
 REPO="${SPARK_TENSORFOLD_REPO_DIR:-$HOME/dgx-spark-dual-stack}"
-DEFAULT_PROFILE=mia-dsv41
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+# shellcheck source=tensorfold-profiles.sh
+. "$HERE/tensorfold-profiles.sh"
+DEFAULT_PROFILE=$(tf_default_profile)
 VLLM_URL=${SPARK_VLLM_ENGINE_URL:-http://127.0.0.1:8000}
 TF_URL=${SPARK_TENSORFOLD_ENGINE_URL:-http://127.0.0.1:8000}
 WORKER=${SPARK_VLLM_WORKER:-gx10-02}
@@ -81,12 +89,44 @@ require_vllm_cached() {  # refuse to stop TensorFold for a model that is not res
 }
 answers() { curl -fsS -m 3 "$1/v1/models" >/dev/null 2>&1; }
 
+# Whatever is live must be what starts after a reboot, so boot enablement is decided here and nowhere else: switching
+# a stack off at boot is part of switching it out. Without this the pair could come back on two stacks at once (both
+# want ~100 of 121 GiB per node), or on a stack that is no longer the one you left running.
+sync_boot() {  # $1 stack (vllm|tensorfold)
+  local stack=$1 u
+  if [ "$stack" = tensorfold ]; then
+    for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service; do
+      systemctl --user disable "$u" >/dev/null 2>&1
+    done
+    systemctl --user enable spark-tensorfold.service >/dev/null 2>&1
+    systemctl --user enable spark-tensorfold-watchdog.service >/dev/null 2>&1
+    log "boot: spark-tensorfold.service + watchdog enabled, vLLM units disabled"
+  else
+    systemctl --user disable spark-tensorfold.service >/dev/null 2>&1
+    systemctl --user disable spark-tensorfold-watchdog.service >/dev/null 2>&1
+    for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service; do
+      systemctl --user enable "$u" >/dev/null 2>&1
+    done
+    log "boot: vLLM units enabled, spark-tensorfold.service + watchdog disabled"
+  fi
+}
+
+boot_state() {  # one line for --status
+  local tf v
+  tf=$(systemctl --user is-enabled spark-tensorfold.service 2>/dev/null || true)
+  v=$(systemctl --user is-enabled spark-vllm-podman.service 2>/dev/null || true)
+  printf 'tensorfold=%s vllm=%s' "${tf:-unknown}" "${v:-unknown}"
+}
+
 case "${1:---status}" in
   --status|-s)
     cur=$(read_stack); prof=$(sed -n 's/^TF_PROFILE=//p' "$CONF" 2>/dev/null | head -1)
     vmodel=$(sed -n 's/^VLLM_MODEL=//p' "$CONF" 2>/dev/null | head -1)
     printf 'stack.conf:   %s%s\n' "$cur" "${prof:+ (profile $prof)}"
     printf 'vllm model:   %s (parked unless the stack is vllm)\n' "${vmodel:-$(model_id)}"
+    printf 'tensorfold:   profile %s serves %s\n' "$(tf_profile)" "$(tf_profile_model)"
+    printf '              recipe %s\n' "$(tf_profile_dir)"
+    printf 'boot:         %s\n' "$(boot_state)"
     if [ "$cur" = tensorfold ]; then
       printf 'vllm:         unit %s (not the active stack)\n' \
         "$(systemctl --user is-active spark-vllm-podman.service 2>/dev/null)"
@@ -108,7 +148,7 @@ case "${1:---status}" in
 esac
 
 target=$1; shift || true
-apply=0; profile=$DEFAULT_PROFILE
+apply=0; profile=$(tf_profile)
 for a in "$@"; do
   case "$a" in
     --apply) apply=1 ;;
@@ -116,9 +156,20 @@ for a in "$@"; do
     *) profile=$a ;;
   esac
 done
+if [ "$target" = tensorfold ]; then
+  tf_known_profile "$profile" ||
+    die "unknown TensorFold profile '$profile' (known: $TF_PROFILES; add one in scripts/tensorfold-profiles.sh)"
+fi
 
 # --- stop the other stack ----------------------------------------------------------
 if [ "$target" = tensorfold ]; then
+  # A profile change must stop the running unit before stack.conf changes: its ExecStop resolves the profile from that
+  # file, and would otherwise stop the profile we are switching *to* and leave the old containers holding the GPUs.
+  if [ "$(read_stack)" = tensorfold ] && [ "$(tf_profile)" != "$profile" ]; then
+    log "stopping profile $(tf_profile) first (its ExecStop reads stack.conf, which is about to change)"
+    systemctl --user stop spark-tensorfold-watchdog.service 2>/dev/null
+    systemctl --user stop spark-tensorfold.service 2>/dev/null
+  fi
   # The health unit restarts vLLM within a minute, so it goes first.
   systemctl --user stop spark-vllm-health.service 2>/dev/null
   systemctl --user stop spark-vllm-podman.service 2>/dev/null
@@ -127,7 +178,8 @@ if [ "$target" = tensorfold ]; then
     ssh -o BatchMode=yes "$WORKER" "podman rm -f $c >/dev/null 2>&1" >/dev/null 2>&1
   done
   write_stack tensorfold "$profile"
-  log "vLLM stopped (unit + containers), stack.conf -> tensorfold/$profile"
+  log "vLLM stopped (unit + containers), stack.conf -> tensorfold/$profile ($(tf_profile_model "$profile"))"
+  sync_boot tensorfold
 else
   # Never stop the live TensorFold stack for a vLLM checkpoint that is not resident.
   require_vllm_cached
@@ -135,6 +187,7 @@ else
   systemctl --user stop spark-tensorfold.service 2>/dev/null
   write_stack vllm "$profile"
   log "TensorFold stopped (unit + watchdog), stack.conf -> vllm"
+  sync_boot vllm
 fi
 
 if [ "$apply" = 0 ]; then
@@ -144,17 +197,31 @@ fi
 
 # --- start the target stack --------------------------------------------------------
 if [ "$target" = tensorfold ]; then
-  MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
-  [ -x "$MIA_DIR/start.sh" ] || die "Mia recipe missing at $MIA_DIR (run $REPO/scripts/setup-mia-recipe.sh)"
+  TDIR=$(tf_profile_dir "$profile")
+  [ -x "$TDIR/start.sh" ] ||
+    die "profile $profile needs $TDIR/start.sh (run $REPO/scripts/$(tf_profile_setup "$profile"))"
   systemctl --user reset-failed spark-tensorfold.service 2>/dev/null
-  log "starting spark-tensorfold.service (first start after a change writes the rank caches: minutes)"
+  log "starting spark-tensorfold.service as profile $profile ($(tf_profile_model "$profile"))"
   # restart, not start: the unit is enabled at boot and exits 0 when stack.conf is vllm
   systemctl --user restart spark-tensorfold.service || die "spark-tensorfold.service failed; see: journalctl --user -u spark-tensorfold.service -n 80"
   systemctl --user start spark-tensorfold-watchdog.service 2>/dev/null
   if answers "$TF_URL"; then
-    log "tensorfold is serving $TF_URL"
+    served=$(curl -fsS -m 5 "$TF_URL/v1/models" 2>/dev/null |
+      python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)
+    log "tensorfold is serving $TF_URL (model ${served:-?}; profile says $(tf_profile_model "$profile"))"
   else
     log "warning: unit is up but $TF_URL does not answer yet"
   fi
+else
+  systemctl --user reset-failed spark-vllm-podman.service 2>/dev/null
+  log "starting spark-vllm-podman.service ($(model_id))"
+  systemctl --user start spark-vllm-podman.service ||
+    die "spark-vllm-podman.service failed; see: journalctl --user -u spark-vllm-podman.service -n 80"
+  systemctl --user start spark-vllm-health.service 2>/dev/null
+  if answers "$VLLM_URL"; then
+    log "vllm is serving $VLLM_URL"
+  else
+    log "warning: unit is up but $VLLM_URL does not answer yet"
+  fi
 fi
-log "done: stack=$(read_stack)"
+log "done: stack=$(read_stack) profile=$(tf_profile) boot=$(boot_state)"
