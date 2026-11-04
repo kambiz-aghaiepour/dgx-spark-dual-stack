@@ -141,7 +141,8 @@ if [ -f "$MIA_DIR/scripts/local.sh" ]; then
     else
       if podman info >/dev/null 2>&1; then ok "podman answers"; else bad "podman info fails"; fi
     fi
-    img=$(sudo -n podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -m1 '^tensorfold-dsv41:')
+    # the head's store may name it docker.io/library/tensorfold-dsv41:<tag> (podman's short-name expansion)
+    img=$(sudo -n podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -m1 -E '(^|/)tensorfold-dsv41:')
     if [ -n "$img" ]; then ok "TensorFold image in the podman store ($img)"; else bad "no tensorfold-dsv41 image in the podman store (docker save | podman load)"; fi
     if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx dsv41-1017-exl3-tf; then
       bad "a docker container named dsv41-1017-exl3-tf still runs (podman should own it)"
