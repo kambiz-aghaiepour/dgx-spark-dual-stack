@@ -11,8 +11,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 MIA_DIR="${SPARK_MIA_DIR:-$HOME/mia-dsv41}"
 MIA_REPO="${MIA_REPO:-https://github.com/kambiz-aghaiepour/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks.git}"
-# podman-support: f6eeb73 (the runtime switch, the NFS device fix and the worker's exported settings; upstream PR #113)
-MIA_REF="${MIA_REF:-f6eeb734d5e93f43899d5b6de0dd5a3afb2da2c9}"
+# podman-support: 0a16fd2 (runtime switch, NFS device, worker exports, memguard kill; upstream PR #113)
+MIA_REF="${MIA_REF:-0a16fd279a8e7a34dbb9dfe6c525666380930984}"
 ENV_EXAMPLE="$ROOT/config/mia-dsv41.env.example"
 
 if [ -d "$MIA_DIR/.git" ]; then
