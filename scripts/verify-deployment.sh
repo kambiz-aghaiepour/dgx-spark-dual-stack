@@ -105,13 +105,13 @@ if [ -d "$DOCKER/mods/busy-loop-fix" ] && ! cmp -s \
 fi
 
 echo
-echo "-- systemd user units enabled"
+echo "-- systemd user units installed (enablement follows stack.conf; checked below)"
 for u in spark-vllm-podman.service spark-vllm-health.service spark-vllm-warmup.service \
          spark-tensorfold.service spark-tensorfold-watchdog.service; do
-  if systemctl --user is-enabled "$u" >/dev/null 2>&1; then
-    ok "$u enabled"
+  if [ -f "$UNITS/$u" ]; then
+    ok "$u installed ($(systemctl --user is-enabled "$u" 2>/dev/null || echo disabled))"
   else
-    bad "$u not enabled"
+    bad "$u missing from $UNITS"
   fi
 done
 
