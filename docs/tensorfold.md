@@ -32,7 +32,7 @@ default (`API_KEY=0`; bound to 0.0.0.0 — LAN exposure is deliberate).
 | Weights | `/srv/mia/hf`, worker reads over NFS | `/srv/mia/glm53`, local copy on each node |
 | Container | `dsv41-1017-exl3-tf` | `glm53-flash-tf` |
 | Footprint | ~200 GB + ~110 GB rank caches per node | ~180 GB per node |
-| Context / streams | 1,048,576 · 4 · DSpark drafts · vision | 1,048,576 · 4 · DFlash2 drafter · vision |
+| Context / streams | 1,048,576 · 4 · DSpark drafts · vision | **262,144** · 4 · DFlash2 drafter · vision |
 | Measured | 55.3–55.6 tok/s single stream | 41.6 tok/s single stream, 92.4 tok/s at 4 |
 
 GLM's Ablit weights are gated: the account has to accept the terms on the model page, and
@@ -114,6 +114,26 @@ sudo -n podman ps --format '{{.Names}} {{.Status}}'      # dsv41-1017-exl3-tf or
 sudo -n podman logs -f dsv41-1017-exl3-tf                # rank 0 (ssh gx10-02 for rank 1)
 sudo -n podman logs -f glm53-flash-tf                    # the GLM profile
 ```
+
+### GLM memory: 262,144 context, not 1M
+
+A 121 GiB node holds ~89 GiB of GLM weights, so the shared KV pool lives in what is left. At the recipe's default
+`CONTEXT=1048576` with `PARALLEL=4`, four days of 60-95k-token conversations filled it: earlyoom on the worker
+(`gx10-c7ae`) sent **113 SIGTERM**s to the rank and finally SIGKILL, the kernel logged
+`NVRM: ... Out of memory [NV_ERR_NO_MEMORY]`, rank 1 died, rank 0 stopped with it, and the pair kept answering
+`/v1/models` from rank 0 alone while every real request blocked - an engine that looks alive and serves nothing.
+
+`~/glm53/scripts/local.sh` sets:
+
+```sh
+CONTEXT=262144        # 2.7x the largest conversation seen; 4x less KV than 1M
+MEMORY_RESERVE_GIB=20 # host headroom above earlyoom's line (recipe default is 14.5 at PARALLEL=4)
+```
+
+Measured after the change: a cold 94,988-token prompt returns in **47 s** (2,021 tok/s prefill), the identical request
+repeats in **0.2 s** from the prefix cache, and available memory stays flat at 15 GiB (head) / 17 GiB (worker) before
+and after. Watch `free -g` on **both** nodes and `journalctl | grep earlyoom` on the worker: the head is not the one
+that dies first.
 
 The GLM recipe refuses a bind mount whose source does not exist (docker used to create it), so
 `start.sh` makes `~/.cache/tensorfold-glm53/<image>` on both nodes before launching; and under
